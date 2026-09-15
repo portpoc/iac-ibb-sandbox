@@ -1,0 +1,140 @@
+name: {{CAPABILITY_TITLE}} IBB
+
+# Stages 1-3 (assign execution id, validate request against schema, check pinned version +
+# implementation) ship below with real, working logic — they are technology-agnostic and identical
+# across every IBB, so scaffold-ibb SKILL.md §4d no longer asks you to re-author them. Everything
+# from stage 4 onward (authorization policy, requirement mapping, credential retrieval, terraform
+# plan/conftest/apply, and the live-resource verification block) is still a placeholder here and
+# MUST be replaced with real logic specific to the selected technology — do not deliver this file
+# with the `echo "TODO"` bodies below stage 3. Follow
+# object-storage-ibb/pipelines/github-actions/object-storage.yml as the worked example of what
+# "real" looks like for the remaining stages.
+#
+# Standardized execution interface (ibb-api-pipeline-component.md §10 pipeline execution stages).
+# The external contract (inputs/outputs/operations/status/error model) must stay stable even if
+# this engine is replaced (CON-004) — do not let consumers depend on anything below except the
+# request/output shape defined in schemas/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "Path to a JSON request file matching schemas/{{CAPABILITY_NAME}}-input-v1.schema.json"
+        required: true
+
+concurrency:
+  # Idempotency: serialize re-runs of the same requestId rather than racing duplicate infrastructure (CON-007).
+  group: {{CAPABILITY_NAME}}-${{ github.event.inputs.request }}
+
+env:
+  IBB_NAME: {{CAPABILITY_NAME}}
+  IBB_VERSION: "{{VERSION}}" # must match ibb-manifest.yaml metadata.version; checked in stage 3
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Assign an execution id (distinct from the caller's requestId) for this run.
+      - name: Assign execution id
+        id: exec
+        run: 'echo "execution_id=exec-$(date +%s)-${{ github.run_id }}" >> "$GITHUB_OUTPUT"'
+
+      # 2. Validate the request against the input schema. This is the ONLY structural gate —
+      #    anything the schema can't express (version/platform pinning) is checked in stage 3.
+      - name: Install validator
+        run: pip install check-jsonschema==0.29.*
+
+      - name: Validate request against schema
+        run: |
+          check-jsonschema \
+            --schemafile schemas/{{CAPABILITY_NAME}}-input-v1.schema.json \
+            "${{ github.event.inputs.request }}"
+
+      # 3. The two things a shared JSON schema cannot express: pinned IBB version matches this
+      #    pipeline, and the requested platform has an approved implementation in the manifest.
+      - name: Check pinned version and implementation
+        id: pin
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQ_VERSION=$(jq -r '.buildingBlock.version' "$REQ")
+          REQ_PLATFORM=$(jq -r '.context.platform' "$REQ")
+
+          if [ "$REQ_VERSION" != "$IBB_VERSION" ]; then
+            echo "::error::buildingBlock.version ($REQ_VERSION) does not match the pinned pipeline version ($IBB_VERSION). VER-004 prohibits floating references."
+            exit 1
+          fi
+
+          IMPL=$(yq -o=json '.implementations' ibb-manifest.yaml | jq -r --arg p "$REQ_PLATFORM" '.[$p] // empty')
+          if [ -z "$IMPL" ]; then
+            echo "::error::platform '$REQ_PLATFORM' has no implementation declared in ibb-manifest.yaml"
+            exit 1
+          fi
+          echo "platform=$REQ_PLATFORM" >> "$GITHUB_OUTPUT"
+
+      # 4. Authorize requested operation against capability + environment (SEC-007). Adjust this
+      #    rule to the org's actual authorization model — a deliberately simple, auditable baseline
+      #    is: only identities in an allow-list may target environment: prd.
+      - name: Authorize operation
+        id: authz
+        run: 'echo "TODO: check caller identity is permitted this operation in this environment"'
+
+      # 5. Resolve implementation + map requirements.<category>.<property> (and
+      #    context.dataClassification) through ibb-manifest.yaml's requirementMapping into IaC
+      #    variables (CON-002: this translation lives inside the IBB, never in the consumer
+      #    request). requirementMapping.<platform> mirrors the same category nesting as the
+      #    request — requirementMapping.<platform>.<category>.<property>.
+      - name: Resolve requirement mapping into IaC vars
+        id: map
+        run: 'echo "TODO: yq/jq requirementMapping.<platform> from ibb-manifest.yaml against ${{ github.event.inputs.request }}"'
+
+      # 6. Short-circuit on validate: schema + version/platform + authZ checks above ARE the
+      #    validation for this operation — nothing to provision.
+      - name: Compose validate-only output
+        if: steps.authz.outputs.operation == 'validate'
+        run: 'echo "TODO: write output.json with status: completed and no result"'
+
+      # 7. Retrieve scoped execution credentials via OIDC/workload-identity federation — never a
+      #    long-lived static credential, and never hand privileged credentials to the caller (SEC-006, SEC-007).
+      - name: Retrieve execution credentials
+        if: steps.authz.outputs.operation != 'validate'
+        run: 'echo "TODO: configure-aws-credentials / azure/login / google-github-actions/auth via OIDC, per platform"'
+
+      # 8-9. Prepare IaC variables/workspace, then run policy-as-code checks PRE-apply (SEC-004).
+      - name: Terraform init/plan
+        if: steps.authz.outputs.operation != 'validate'
+        run: 'echo "TODO: terraform init && terraform plan -out=tfplan"'
+
+      - name: Policy check (pre-apply)
+        if: steps.authz.outputs.operation != 'validate'
+        run: 'echo "TODO: conftest test tfplan.json --policy policies/<platform>/"'
+
+      # 10. Execute IaC.
+      - name: Terraform apply / destroy
+        if: steps.authz.outputs.operation != 'validate'
+        run: 'echo "TODO: terraform apply tfplan"'
+
+      # 11. Verify deployed state AND Security Blueprint controls against LIVE resources —
+      #     a successful apply is not evidence of conformance (SEC-005).
+      - name: Verify controls (post-apply)
+        if: steps.authz.outputs.operation != 'validate' && steps.authz.outputs.operation != 'delete'
+        run: 'echo "TODO: re-check live resource state against each SBP control ID"'
+
+      # 12-13. Compose evidence and the standardized output, propagating context.correlationId
+      #        through to the evidence record (EVD-001, EVD-002, EVD-003). status must distinguish
+      #        completed / partially completed / failed.
+      - name: Compose evidence and standardized output
+        if: steps.authz.outputs.operation != 'validate'
+        run: 'echo "TODO: write evidence/<requestId>.json and output.json matching schemas/{{CAPABILITY_NAME}}-output-v1.schema.json"'
+
+      # 14. Publish standardized outputs as artifacts (success or the shared error contract).
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: {{CAPABILITY_NAME}}-output-${{ steps.exec.outputs.execution_id }}
+          path: |
+            output.json
+          if-no-files-found: ignore

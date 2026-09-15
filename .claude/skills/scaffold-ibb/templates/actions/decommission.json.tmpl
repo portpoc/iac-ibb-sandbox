@@ -1,0 +1,26 @@
+{
+  "identifier": "decommission_{{CAPABILITY_NAME_UNDERSCORE}}",
+  "title": "Decommission {{CAPABILITY_TITLE}} ({{PLATFORM_TITLE}})",
+  "icon": "Cloud",
+  "description": "Delete an existing {{CAPABILITY_TITLE}} resource via the {{CAPABILITY_NAME}} IBB pipeline ({{CAPABILITY_NAME}}@{{VERSION}}).",
+  "trigger": {
+    "type": "self-service",
+    "operation": "DELETE",
+    "userInputs": {
+      "properties": {{USER_INPUTS_PROPERTIES_JSON}},
+      "required": {{USER_INPUTS_REQUIRED_JSON}},
+      "order": {{USER_INPUTS_ORDER_JSON}}
+    }
+  },
+  "invocationMethod": {
+    "type": "GITHUB",
+    "org": "{{ORG}}",
+    "repo": "{{REPO}}",
+    "workflow": "{{WORKFLOW_FILE}}",
+    "workflowInputs": {
+      "request": "{\"request\":{\"operation\":\"delete\",\"requestId\":\"req-{{ .run.id }}\"},\"buildingBlock\":{\"name\":\"{{CAPABILITY_NAME}}\",\"version\":\"{{VERSION}}\"},\"context\":{\"applicationId\":\"{{ .inputs.applicationId }}\",\"environment\":\"{{ .inputs.environment }}\",\"platform\":\"{{PLATFORM_OR_INPUT}}\",\"costCenter\":\"{{ .inputs.costCenter }}\",\"dataClassification\":\"{{ .inputs.dataClassification }}\",\"requesterIdentity\":\"{{ .trigger.by.user.email }}\",\"correlationId\":\"corr-{{ .run.id }}\",\"changeReference\":\"{{ .inputs.changeReference }}\"},\"requirements\":{{REQUIREMENT_REQUEST_TEMPLATE_JSON}} }"
+    },
+    "reportWorkflowStatus": true
+  },
+  "requiredApproval": false
+}

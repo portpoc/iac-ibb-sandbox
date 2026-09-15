@@ -1,0 +1,271 @@
+// DNS Record IBB — Jenkins pipeline. Mirrors pipelines/github-actions/dns-record.yml stage-for-
+// stage so the external contract (schemas/, ibb-manifest.yaml) stays engine-independent (CON-004).
+//
+// Parameter: REQUEST_FILE — path to a JSON request matching schemas/dns-record-input-v1.schema.json.
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'REQUEST_FILE', description: 'Path to a JSON request file matching schemas/dns-record-input-v1.schema.json')
+    }
+
+    environment {
+        IBB_NAME    = 'dns-record'
+        IBB_VERSION = '0.1.0' // must match ibb-manifest.yaml metadata.version; checked in stage "Check pinned version"
+        WORKDIR     = 'dns-record-ibb'
+    }
+
+    options {
+        // Idempotency: serialize re-runs of the same requestId rather than racing duplicate infrastructure (CON-007).
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Assign execution id') {
+            steps {
+                dir(env.WORKDIR) {
+                    script {
+                        env.EXECUTION_ID = "exec-${System.currentTimeMillis()}-${env.BUILD_NUMBER}"
+                    }
+                }
+            }
+        }
+
+        stage('Validate request against schema') {
+            steps {
+                dir(env.WORKDIR) {
+                    sh '''
+                        set -euo pipefail
+                        pip install --quiet check-jsonschema==0.29.* yq
+                        check-jsonschema --schemafile schemas/dns-record-input-v1.schema.json "$REQUEST_FILE"
+                    '''
+                }
+            }
+        }
+
+        stage('Check pinned version and implementation') {
+            steps {
+                dir(env.WORKDIR) {
+                    script {
+                        def reqVersion = sh(script: "jq -r '.buildingBlock.version' \"$REQUEST_FILE\"", returnStdout: true).trim()
+                        def reqPlatform = sh(script: "jq -r '.context.platform' \"$REQUEST_FILE\"", returnStdout: true).trim()
+
+                        if (reqVersion != env.IBB_VERSION) {
+                            error "buildingBlock.version (${reqVersion}) does not match the pinned pipeline version (${env.IBB_VERSION}). VER-004 prohibits floating references."
+                        }
+
+                        def impl = sh(script: "yq -o=json '.implementations' ibb-manifest.yaml | jq -r --arg p '${reqPlatform}' '.[\$p] // empty'", returnStdout: true).trim()
+                        if (!impl) {
+                            error "platform '${reqPlatform}' has no implementation declared in ibb-manifest.yaml"
+                        }
+                        env.PLATFORM = reqPlatform
+                    }
+                }
+            }
+        }
+
+        stage('Authorize operation') {
+            steps {
+                dir(env.WORKDIR) {
+                    script {
+                        env.OPERATION = sh(script: "jq -r '.request.operation' \"$REQUEST_FILE\"", returnStdout: true).trim()
+                        env.ENVIRONMENT = sh(script: "jq -r '.context.environment' \"$REQUEST_FILE\"", returnStdout: true).trim()
+                        def changeRef = sh(script: "jq -r '.context.changeReference // empty' \"$REQUEST_FILE\"", returnStdout: true).trim()
+
+                        if (env.ENVIRONMENT == 'prd' && !changeRef) {
+                            error "SBP AWS-005: context.changeReference is required for environment: prd"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Resolve requirement mapping into IaC vars') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                dir(env.WORKDIR) {
+                    sh '''
+                        set -euo pipefail
+                        cat <<EOF > iac/aws/terraform.tfvars.json
+{
+  "application_id": $(jq '.context.applicationId' "$REQUEST_FILE"),
+  "environment": $(jq '.context.environment' "$REQUEST_FILE"),
+  "data_classification": $(jq '.context.dataClassification' "$REQUEST_FILE"),
+  "dns_zone": $(jq '.requirements.operations.dnsZone' "$REQUEST_FILE"),
+  "record_name": $(jq '.requirements.operations.recordName' "$REQUEST_FILE"),
+  "record_type": $(jq '.requirements.operations.recordType' "$REQUEST_FILE"),
+  "ttl_seconds": $(jq '.requirements.operations.ttlSeconds' "$REQUEST_FILE"),
+  "record_values": $(jq '.requirements.operations.recordValues' "$REQUEST_FILE")
+}
+EOF
+                    '''
+                }
+            }
+        }
+
+        stage('Compose validate-only output') {
+            when { environment name: 'OPERATION', value: 'validate' }
+            steps {
+                dir(env.WORKDIR) {
+                    sh '''
+                        set -euo pipefail
+                        REQUEST_ID=$(jq -r '.request.requestId' "$REQUEST_FILE")
+                        jq -n --arg requestId "$REQUEST_ID" --arg executionId "$EXECUTION_ID" \
+                          --arg version "$IBB_VERSION" --arg impl "$PLATFORM" \
+                          '{requestId: $requestId, executionId: $executionId, status: "completed",
+                            buildingBlock: {name: "dns-record", version: $version, implementation: $impl}}' \
+                          > output.json
+                    '''
+                }
+            }
+        }
+
+        stage('Retrieve execution credentials') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                // TODO: adapt to the org's actual Jenkins AWS credential provider (e.g. the
+                // pipeline-aws plugin's withAWS(role: ..., roleAccount: ...) using a workload
+                // identity / OIDC-federated role — never a long-lived static credential (SEC-006,
+                // SEC-007, SBP AWS-001). No universal Jenkins equivalent of configure-aws-credentials
+                // exists across orgs, so this step must be wired to the org's actual credential broker.
+                echo 'TODO: obtain scoped AWS credentials via the org OIDC/workload-identity broker'
+            }
+        }
+
+        stage('Terraform init/plan') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                dir("${env.WORKDIR}/iac/aws") {
+                    sh '''
+                        set -euo pipefail
+                        terraform init -input=false
+                        if [ "$OPERATION" = "delete" ]; then
+                          terraform plan -destroy -input=false -out=tfplan
+                        else
+                          terraform plan -input=false -out=tfplan
+                        fi
+                        terraform show -json tfplan > tfplan.json
+                    '''
+                }
+            }
+        }
+
+        stage('Policy check (pre-apply)') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                dir(env.WORKDIR) {
+                    sh 'conftest test iac/aws/tfplan.json --policy policies/aws/'
+                }
+            }
+        }
+
+        stage('Terraform apply / destroy') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                dir("${env.WORKDIR}/iac/aws") {
+                    sh 'terraform apply -input=false -auto-approve tfplan'
+                }
+            }
+        }
+
+        stage('Verify controls (post-apply)') {
+            when {
+                allOf {
+                    not { environment name: 'OPERATION', value: 'validate' }
+                    not { environment name: 'OPERATION', value: 'delete' }
+                }
+            }
+            steps {
+                dir("${env.WORKDIR}/iac/aws") {
+                    sh '''
+                        set -euo pipefail
+                        RECORD_ID=$(terraform output -raw record_id)
+                        FQDN=$(terraform output -raw fqdn)
+                        ZONE_ID=$(echo "$RECORD_ID" | cut -d'_' -f1)
+                        RECORD_TYPE=$(jq -r '.requirements.operations.recordType' "$REQUEST_FILE")
+
+                        LIVE=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+                          --query "ResourceRecordSets[?Name=='${FQDN}.' && Type=='${RECORD_TYPE}']" --output json)
+                        CONTROL_002="fail"
+                        [ "$(echo "$LIVE" | jq 'length')" -gt 0 ] && CONTROL_002="pass"
+
+                        EVENTS=$(aws cloudtrail lookup-events \
+                          --lookup-attributes AttributeKey=EventName,AttributeValue=ChangeResourceRecordSets \
+                          --max-results 5 --output json || echo '{"Events":[]}')
+                        CONTROL_004="fail"
+                        [ "$(echo "$EVENTS" | jq '.Events | length')" -gt 0 ] && CONTROL_004="pass"
+
+                        jq -n --arg c002 "$CONTROL_002" --arg c004 "$CONTROL_004" \
+                          '[{control: "AWS-002", result: $c002, detail: "live record set present in allow-listed zone"},
+                            {control: "AWS-004", result: $c004, detail: "CloudTrail captured ChangeResourceRecordSets event"}]' \
+                          > ../../verification.json
+                    '''
+                }
+            }
+        }
+
+        stage('Compose evidence and standardized output') {
+            when { not { environment name: 'OPERATION', value: 'validate' } }
+            steps {
+                dir(env.WORKDIR) {
+                    sh '''
+                        set -euo pipefail
+                        REQUEST_ID=$(jq -r '.request.requestId' "$REQUEST_FILE")
+                        CORRELATION_ID=$(jq -r '.context.correlationId' "$REQUEST_FILE")
+
+                        STATUS="completed"
+                        if [ -f verification.json ] && jq -e 'map(select(.result == "fail")) | length > 0' verification.json > /dev/null; then
+                          STATUS="partially completed"
+                        fi
+
+                        if [ "$OPERATION" = "delete" ]; then
+                          RESULT='{}'
+                        else
+                          RESULT=$(cd iac/aws && jq -n --arg recordId "$(terraform output -raw record_id)" \
+                            --arg fqdn "$(terraform output -raw fqdn)" \
+                            '{recordId: $recordId, fqdn: $fqdn, operationalState: "active"}')
+                        fi
+
+                        jq -n --arg requestId "$REQUEST_ID" --arg executionId "$EXECUTION_ID" \
+                          --arg status "$STATUS" --arg version "$IBB_VERSION" --arg impl "$PLATFORM" \
+                          --argjson result "$RESULT" --arg correlationId "$CORRELATION_ID" \
+                          --arg evidenceLocation "verification.json" \
+                          '{requestId: $requestId, executionId: $executionId, status: $status,
+                            buildingBlock: {name: "dns-record", version: $version, implementation: $impl},
+                            result: $result,
+                            evidence: {complianceResult: (if $status == "completed" then "passed" else "failed" end),
+                                       evidenceLocation: $evidenceLocation, deploymentRecord: $correlationId}}' \
+                          > output.json
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        // EVD-004: a failed stage above must still surface a structured error, not just a red
+        // build — compose ibb-error-v1.schema.json whenever the run did not reach a successful
+        // "Compose evidence and standardized output" stage.
+        failure {
+            dir(env.WORKDIR) {
+                sh '''
+                    set +e
+                    REQUEST_ID=$(jq -r '.request.requestId // "unknown"' "$REQUEST_FILE" 2>/dev/null || echo "unknown")
+                    CORRELATION_ID=$(jq -r '.context.correlationId // empty' "$REQUEST_FILE" 2>/dev/null || echo "")
+                    jq -n --arg requestId "$REQUEST_ID" --arg executionId "$EXECUTION_ID" \
+                      --arg version "$IBB_VERSION" --arg correlationId "$CORRELATION_ID" \
+                      '{requestId: $requestId, executionId: $executionId, status: "failed",
+                        buildingBlock: {name: "dns-record", version: $version, implementation: "aws"},
+                        error: {code: "IBB-DNSRECORD-001", category: "execution",
+                                message: "Pipeline run failed — see the failing stage in the Jenkins build log for detail.",
+                                retryable: true, failedStage: "unknown", correlationId: $correlationId}}' \
+                      > output.json
+                '''
+            }
+        }
+        always {
+            archiveArtifacts artifacts: "${env.WORKDIR}/output.json, ${env.WORKDIR}/verification.json", allowEmptyArchive: true
+        }
+    }
+}

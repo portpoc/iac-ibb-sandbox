@@ -1,0 +1,67 @@
+apiVersion: infrastructure.dsv/v1
+kind: InfrastructureBuildingBlock
+
+metadata:
+  name: dns-record
+  version: 0.1.0
+  owner: platform-networking
+  status: draft   # draft -> in-review -> approved (G3 release gate outcome; do not hand-set to approved)
+  support: "#platform-networking"
+
+# The agnostic contract consumers code against. Stable across implementations (CON-004).
+contract:
+  interface:
+    type: pipeline
+    implementation: [github-actions, jenkins]
+  operations:
+    - validate
+    - create
+    - read
+    - upgrade
+    - delete
+  schemas:
+    input: schemas/dns-record-input-v1.schema.json
+    output: schemas/dns-record-output-v1.schema.json
+    error: schemas/ibb-error-v1.schema.json
+  execution:
+    asynchronous: false   # set true and add status polling if operations are long-running (CON-006)
+    idempotencyKey: request.requestId
+
+# An IBB version pins an EXACT, tested combination of all four components, per supported
+# deployment context. Consumers never assemble these themselves (ART-002, VER-002).
+implementations:
+  aws:
+    technology: "Amazon Route 53"
+    referenceDesign: reference-designs/aws/reference-design.md
+    securityBlueprint: security-blueprints/aws/security-blueprint.md
+    iac: iac/aws
+    minVersion: "0.1.0"
+
+# Every dependency on another capability is declared explicitly; consumers never orchestrate
+# an IBB's internal dependencies (ART-006).
+dependencies:
+  - logging
+
+# Maps agnostic requirement to the provider. Nested by the same fixed high-level categories as
+# requirements.<category>.<property> in the input schema (requirementMapping.<platform>.<category>.<property>),
+# so the translation table's shape mirrors the request it's translating.
+# This translation lives INSIDE the IBB, never in the consumer request (CON-002).
+requirementMapping:
+  aws:
+    dataClassification: "context.dataClassification maps to a plan-time policy check (policies/aws/aws-dns-record.rego) — Route 53 records are globally public, so 'confidential' is rejected outright, not translated to a resource setting."
+    operations:
+      dnsZone:
+        terraformVariable: dns_zone
+        notes: "Looked up via data.aws_route53_zone by name; must resolve to a hosted zone on the platform's allow-list (SBP AWS-002)."
+      recordName:
+        terraformVariable: record_name
+        notes: "Combined with dnsZone to form the record's fully-qualified name."
+      recordType:
+        terraformVariable: record_type
+        notes: "Passed through 1:1; Route 53 record type enum matches the agnostic enum exactly (A, CNAME, TXT)."
+      ttlSeconds:
+        terraformVariable: ttl_seconds
+        notes: "Passed through 1:1 as the record's ttl attribute."
+      recordValues:
+        terraformVariable: record_values
+        notes: "Passed through 1:1 as the record's records list."

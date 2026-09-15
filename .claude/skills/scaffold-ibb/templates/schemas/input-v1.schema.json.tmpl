@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "{{CAPABILITY_NAME}}-input-v1",
+  "title": "{{CAPABILITY_TITLE}} IBB - agnostic input contract",
+  "type": "object",
+  "required": ["request", "buildingBlock", "context", "requirements"],
+  "additionalProperties": false,
+  "properties": {
+    "request": {
+      "type": "object",
+      "required": ["operation", "requestId"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "enum": [{{OPERATIONS_ENUM}}] },
+        "requestId": { "type": "string", "pattern": "^req-[A-Za-z0-9._-]{4,}$" }
+      }
+    },
+    "buildingBlock": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "{{CAPABILITY_NAME}}" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": [
+        "applicationId",
+        "environment",
+        "platform",
+        "costCenter",
+        "dataClassification",
+        "requesterIdentity",
+        "correlationId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "applicationId": { "type": "string", "pattern": "^APP-[0-9]{3,}$" },
+        "environment": { "enum": ["dev", "qua", "tst", "ppr", "prd"] },
+        "platform": { "enum": [{{PLATFORMS_ENUM}}] },
+        "region": { "type": "string" },
+        "costCenter": { "type": "string" },
+        "dataClassification": { "enum": ["internal", "confidential"] },
+        "requesterIdentity": {
+          "type": "string",
+          "description": "Authenticated caller identity (a non-human identity for automation) (CON-009)."
+        },
+        "correlationId": {
+          "type": "string",
+          "description": "End-to-end traceability across portal, orchestrator, pipeline, IaC, resource (CON-009, EVD-003)."
+        },
+        "changeReference": {
+          "type": "string",
+          "description": "Approved change record reference. Required by policy for some environments; enforce conditionally in the pipeline, not just the schema."
+        }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "description": "Agnostic, capability-specific knobs, nested by the fixed high-level categories (sizing/access/resilience/security/operations) from requirement-dictionary/requirement-properties.yaml, per scaffold-ibb SKILL.md §1b. Do NOT put dataClassification here — it is a mandatory context field, already required above.",
+      "required": [{{REQUIREMENT_CATEGORY_NAMES}}],
+      "additionalProperties": false,
+      "properties": {
+{{REQUIREMENT_CATEGORY_PROPERTIES}}
+      }
+    }
+  }
+}

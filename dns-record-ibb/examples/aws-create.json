@@ -1,0 +1,28 @@
+{
+  "request": {
+    "operation": "create",
+    "requestId": "req-example-0001"
+  },
+  "buildingBlock": {
+    "name": "dns-record",
+    "version": "0.1.0"
+  },
+  "context": {
+    "applicationId": "APP-1234",
+    "environment": "dev",
+    "platform": "aws",
+    "costCenter": "example-cost-center",
+    "dataClassification": "internal",
+    "requesterIdentity": "svc-example-caller",
+    "correlationId": "corr-example-0001"
+  },
+  "requirements": {
+    "operations": {
+      "dnsZone": "example.com.",
+      "recordName": "www",
+      "recordType": "A",
+      "ttlSeconds": 300,
+      "recordValues": ["203.0.113.10"]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+apiVersion: infrastructure.dsv/v1
+kind: InfrastructureBuildingBlock
+
+metadata:
+  name: {{CAPABILITY_NAME}}
+  version: {{VERSION}}
+  owner: {{OWNER_TEAM}}
+  status: draft   # draft -> in-review -> approved (G3 release gate outcome; do not hand-set to approved)
+  support: "{{SUPPORT_CONTACT}}"
+
+# The agnostic contract consumers code against. Stable across implementations (CON-004).
+contract:
+  interface:
+    type: pipeline
+    implementation: {{PIPELINE_ENGINE}}
+  operations:
+{{OPERATIONS}}
+  schemas:
+    input: schemas/{{CAPABILITY_NAME}}-input-v1.schema.json
+    output: schemas/{{CAPABILITY_NAME}}-output-v1.schema.json
+    error: schemas/ibb-error-v1.schema.json
+  execution:
+    asynchronous: false   # set true and add status polling if operations are long-running (CON-006)
+    idempotencyKey: request.requestId
+
+# An IBB version pins an EXACT, tested combination of all four components, per supported
+# deployment context. Consumers never assemble these themselves (ART-002, VER-002).
+implementations:
+{{IMPLEMENTATIONS_BLOCK}}
+
+# Every dependency on another capability is declared explicitly; consumers never orchestrate
+# an IBB's internal dependencies (ART-006).
+dependencies:
+{{DEPENDENCIES}}
+
+# Maps agnostic requirement to the provider. Nested by the same fixed high-level categories as
+# requirements.<category>.<property> in the input schema (requirementMapping.<platform>.<category>.<property>),
+# so the translation table's shape mirrors the request it's translating.
+# This translation lives INSIDE the IBB, never in the consumer request (CON-002).
+requirementMapping:
+{{REQUIREMENT_MAPPING_BLOCK}}

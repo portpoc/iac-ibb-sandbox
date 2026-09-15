@@ -1,0 +1,121 @@
+{
+  "identifier": "update_dns_record",
+  "title": "Update DNS Record (AWS)",
+  "icon": "Cloud",
+  "description": "Update an existing DNS Record resource in place via the dns-record IBB pipeline (dns-record@0.1.0).",
+  "trigger": {
+    "type": "self-service",
+    "operation": "DAY-2",
+    "userInputs": {
+      "properties": {
+        "environment": {
+          "type": "string",
+          "title": "Environment",
+          "enum": [
+            "dev",
+            "qua",
+            "tst",
+            "ppr",
+            "prd"
+          ],
+          "enumColors": {
+            "dev": "blue",
+            "qua": "yellow",
+            "tst": "bronze",
+            "ppr": "orange",
+            "prd": "red"
+          }
+        },
+        "applicationId": {
+          "type": "string",
+          "title": "Application ID",
+          "description": "Pattern APP-nnn, e.g. APP-1234."
+        },
+        "costCenter": {
+          "type": "string",
+          "title": "Cost center"
+        },
+        "dataClassification": {
+          "type": "string",
+          "title": "Data classification",
+          "enum": [
+            "internal"
+          ],
+          "description": "DNS records are globally public; 'confidential' is always rejected pre-apply (SBP AWS-003), so it isn't offered here."
+        },
+        "changeReference": {
+          "type": "string",
+          "title": "Change reference",
+          "description": "Approved change record reference. Required by the pipeline for environment: prd (SBP AWS-005); optional otherwise."
+        },
+        "dnsZone": {
+          "type": "string",
+          "title": "DNS zone",
+          "description": "e.g. example.com. \u2014 must be on the platform's hosted-zone allow-list (SBP AWS-002)."
+        },
+        "recordName": {
+          "type": "string",
+          "title": "Record name",
+          "description": "Relative to the DNS zone, e.g. \"www\" for www.example.com."
+        },
+        "recordType": {
+          "type": "string",
+          "title": "Record type",
+          "enum": [
+            "A",
+            "CNAME",
+            "TXT"
+          ]
+        },
+        "ttlSeconds": {
+          "type": "number",
+          "title": "TTL (seconds)",
+          "minimum": 1,
+          "default": 300
+        },
+        "recordValues": {
+          "type": "array",
+          "title": "Record values",
+          "description": "IP address(es) for A, a hostname for CNAME, or string content for TXT.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "environment",
+        "applicationId",
+        "costCenter",
+        "dataClassification",
+        "dnsZone",
+        "recordName",
+        "recordType",
+        "ttlSeconds",
+        "recordValues"
+      ],
+      "order": [
+        "environment",
+        "applicationId",
+        "costCenter",
+        "dataClassification",
+        "changeReference",
+        "dnsZone",
+        "recordName",
+        "recordType",
+        "ttlSeconds",
+        "recordValues"
+      ]
+    }
+  },
+  "invocationMethod": {
+    "type": "GITHUB",
+    "org": "portpoc",
+    "repo": "iac-ibb-sandbox",
+    "workflow": "dns-record.yml",
+    "workflowInputs": {
+      "request": "{\"request\":{\"operation\":\"upgrade\",\"requestId\":\"req-{{ .run.id }}\"},\"buildingBlock\":{\"name\":\"dns-record\",\"version\":\"0.1.0\"},\"context\":{\"applicationId\":\"{{ .inputs.applicationId }}\",\"environment\":\"{{ .inputs.environment }}\",\"platform\":\"aws\",\"costCenter\":\"{{ .inputs.costCenter }}\",\"dataClassification\":\"{{ .inputs.dataClassification }}\",\"requesterIdentity\":\"{{ .trigger.by.user.email }}\",\"correlationId\":\"corr-{{ .run.id }}\",\"changeReference\":\"{{ .inputs.changeReference }}\"},\"requirements\":{\"operations\":{\"dnsZone\":\"{{ .inputs.dnsZone }}\",\"recordName\":\"{{ .inputs.recordName }}\",\"recordType\":\"{{ .inputs.recordType }}\",\"ttlSeconds\":{{ .inputs.ttlSeconds }},\"recordValues\":{{ .inputs.recordValues }} } } }"
+    },
+    "reportWorkflowStatus": true
+  },
+  "requiredApproval": false
+}

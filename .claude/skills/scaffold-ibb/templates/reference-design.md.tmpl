@@ -1,0 +1,68 @@
+# {{CAPABILITY_TITLE}} — {{PLATFORM_TITLE}} Technical Reference Design
+
+- **Capability:** {{CAPABILITY_NAME}}
+- **Platform:** {{PLATFORM}}
+- **Owning IBB:** {{CAPABILITY_NAME}}@{{VERSION}}
+- **TRD version:** {{VERSION}}
+- **Status:** draft
+- **Owner:** {{OWNER_TEAM}}
+
+<!-- Fill in all 13 sections below before this leaves draft. A TRD without a consumption-interface
+     section (11) forces every solution architect to reverse-engineer this design — do not skip it. -->
+
+## 1. Identity
+
+Capability, platform, owning IBB and version, TRD version, status, owner (as above).
+
+## 2. Selected technology
+
+<!-- The specific service/product on {{PLATFORM_TITLE}}, and why it was selected over alternatives. -->
+
+## 3. Architecture and components
+
+<!-- Component structure and how the parts relate. -->
+
+## 4. Network topology
+
+<!-- Connectivity, segmentation, private access, name resolution. -->
+
+## 5. Configuration model
+
+<!-- Approved settings, defaults, and which parameters are exposed to the consumer via
+     requirementMapping in ibb-manifest.yaml. -->
+
+## 6. Availability and resilience
+
+<!-- Availability classes -> replication/failover behaviour mapping. -->
+
+## 7. Backup and recovery
+
+<!-- What is protected, retention, recovery objectives, how recovery is executed. -->
+
+## 8. Observability integration
+
+<!-- Metrics, logs, traces, health signals, and where they are sent. -->
+
+## 9. Required integrations
+
+<!-- Identity, key management, logging, DNS, monitoring, backup, other consumed capabilities.
+     Cross-reference the `dependencies` list in ibb-manifest.yaml. -->
+
+## 10. Platform-specific constraints
+
+<!-- Limits, quotas, regional availability, provider behaviour that changes the design. -->
+
+## 11. Consumption interface
+
+<!-- What the solution actually sees: endpoints, identity model, connection pattern, returned
+     outputs. This is the section Solution Designs reference — be concrete. -->
+
+## 12. Operational responsibilities
+
+<!-- What the IBB team operates vs. what the consuming solution operates, and the boundary. -->
+
+## 13. Traceability
+
+- Paired Security Blueprint: `security-blueprints/{{PLATFORM}}/security-blueprint.md@{{VERSION}}`
+- IaC implementation: `iac/{{PLATFORM}}@{{VERSION}}`
+- Pipeline logic: `pipelines/{{PIPELINE_ENGINE}}/{{CAPABILITY_NAME}}.yml@{{VERSION}}`

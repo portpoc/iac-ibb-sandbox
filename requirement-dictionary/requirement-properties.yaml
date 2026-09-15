@@ -1,0 +1,110 @@
+# Shared, cross-IBB catalog of agnostic `requirements` input properties, organized under a FIXED
+# set of high-level categories. Lives outside any single IBB (and outside the scaffold-ibb skill
+# itself) so every IBB's input schema nests requirements the same way — requirements.<category>.<property>
+# — and the same property (name, type, enum, description) is reused verbatim across capabilities
+# instead of being reinvented per IBB.
+#
+# Read/write process: automation-factory-architecture/.claude/skills/scaffold-ibb/SKILL.md §1b.
+#
+# Rules:
+# - Categories are fixed and high-level, exactly like the context.platform / context.environment
+#   vocabularies in SKILL.md §1a. Do not add a 6th top-level category for a new IBB — if a property
+#   genuinely doesn't fit any of the five below, that is a conversation about extending this fixed
+#   list, not a per-IBB schema edit.
+# - Every property must be agnostic to the underlying technology (ART-004/CON-002): no vendor SKUs,
+#   instance types, IOPS numbers, or other provider-specific settings. The same property and value
+#   set must make sense across every platform that uses it.
+# - `usedBy` lists every capability (IBB name) currently consuming the property. When an IBB reuses
+#   an existing property, append its name to `usedBy` rather than redefining the property elsewhere.
+# - A category with no properties yet is kept as an empty `properties: {}` placeholder — do not
+#   delete a category just because nothing uses it yet.
+
+categories:
+  sizing:
+    description: >
+      Capacity, throughput, or access-frequency tier — how big/fast/hot the resource is. Never a
+      vendor SKU, instance type, or IOPS number.
+    properties:
+      storageTier:
+        type: string
+        enum: [standard, infrequent-access, archive]
+        description: >
+          Access-frequency tier; maps to the provider's storage class / access tier
+          (e.g. S3 storage class, Azure Blob access tier).
+        usedBy: [object-storage]
+
+  access:
+    description: >
+      Who or what can reach, read, or write the resource.
+    properties:
+      accessScope:
+        type: string
+        enum: [private, internal, public-read]
+        description: >
+          Who can read the resource's data: only identities granted via the identity dependency,
+          any principal within the org, or anonymous/public read.
+        usedBy: [object-storage]
+
+  resilience:
+    description: >
+      Durability, versioning, retention, backup, and availability behaviour.
+    properties:
+      versioningEnabled:
+        type: boolean
+        description: Whether prior versions/state are retained on overwrite or delete.
+        usedBy: [object-storage]
+      retentionDays:
+        type: integer
+        minimum: 1
+        description: >
+          Optional lifecycle expiry: data older than this is automatically deleted. Omitted means
+          no automatic expiry.
+        usedBy: [object-storage]
+
+  security:
+    description: >
+      Encryption and data-protection requirements beyond access control (access control itself
+      belongs in the `access` category).
+    properties:
+      encryptionRequired:
+        type: boolean
+        description: >
+          Whether a customer-managed key (via the key-management IBB) is mandatory, vs.
+          platform-default encryption.
+        usedBy: [object-storage]
+
+  operations:
+    description: >
+      Scheduling, maintenance windows, tagging, and other operational knobs that don't fit the
+      categories above.
+    properties:
+      dnsZone:
+        type: string
+        description: >
+          The DNS zone the record belongs to, identified by its domain name (e.g. example.com.).
+          Maps to the provider's hosted-zone/DNS-zone resource.
+        usedBy: [dns-record]
+      recordName:
+        type: string
+        description: >
+          The record's name, relative to dnsZone (e.g. "www" for www.example.com.).
+        usedBy: [dns-record]
+      recordType:
+        type: string
+        enum: [A, CNAME, TXT]
+        description: DNS resource record type.
+        usedBy: [dns-record]
+      ttlSeconds:
+        type: integer
+        minimum: 1
+        description: Time-to-live, in seconds, for the record's cache lifetime.
+        usedBy: [dns-record]
+      recordValues:
+        type: array
+        items:
+          type: string
+        minItems: 1
+        description: >
+          The record's target value(s) — IP address(es) for A, a hostname for CNAME, or
+          string content for TXT.
+        usedBy: [dns-record]

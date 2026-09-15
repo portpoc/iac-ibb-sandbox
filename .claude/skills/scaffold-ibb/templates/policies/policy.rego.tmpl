@@ -1,0 +1,28 @@
+package {{CAPABILITY_NAME_UNDERSCORE}}.{{PLATFORM_UNDERSCORE}}
+
+# SHAPE REFERENCE ONLY. scaffold-ibb SKILL.md §4d requires writing real, uncommented deny rules
+# here — one per plan-time-checkable control from the Security Blueprint just authored, keyed to
+# the actual Terraform resource type/attribute this IBB uses. Do not deliver this file with only
+# the commented-out examples below.
+#
+# Policy-as-code gate run PRE-apply against the Terraform plan (SEC-004). Each deny rule should
+# cite the Security Blueprint control ID it enforces so the pairing is auditable
+# (security-blueprints/{{PLATFORM}}/security-blueprint.md).
+
+import future.keywords.in
+
+# SBP {{PLATFORM_PREFIX}}-001 — example: deny public network access
+# deny[msg] {
+#   resource := input.resource_changes[_]
+#   resource.type == "<provider_resource_type>"
+#   resource.change.after.public_network_access_enabled == true
+#   msg := sprintf("SBP {{PLATFORM_PREFIX}}-001: public network access must be disabled (%s)", [resource.address])
+# }
+
+# SBP {{PLATFORM_PREFIX}}-002 — example: deny missing encryption at rest
+# deny[msg] {
+#   resource := input.resource_changes[_]
+#   resource.type == "<provider_resource_type>"
+#   not resource.change.after.encryption_enabled
+#   msg := sprintf("SBP {{PLATFORM_PREFIX}}-002: encryption at rest is mandatory (%s)", [resource.address])
+# }

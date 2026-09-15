@@ -1,0 +1,50 @@
+# {{CAPABILITY_TITLE}} IBB
+
+A technology-agnostic **{{CAPABILITY_TITLE}}** capability, delivered as an Infrastructure Building
+Block: Technical Reference Design + Security Blueprint + Infrastructure-as-Code + Deployment Pipeline,
+bound together by [`ibb-manifest.yaml`](./ibb-manifest.yaml).
+
+- **Owner:** {{OWNER_TEAM}}
+- **Support:** {{SUPPORT_CONTACT}}
+- **Status:** draft — not yet released; see [`CHANGELOG.md`](./CHANGELOG.md)
+
+## What this capability is
+
+<!-- One paragraph, technology-agnostic. What does a consumer get, without naming a vendor? -->
+
+## Supported implementations
+
+| Platform | Reference Design | Security Blueprint |
+| :--- | :--- | :--- |
+{{PLATFORM_TABLE_ROWS}}
+
+## Supported operations
+
+{{OPERATIONS_LIST}}
+
+## Consuming this IBB
+
+Consumers call the pipeline in [`pipelines/`](./pipelines/) with the mandatory context envelope
+(see `05-standards-contracts.md` §8 in the architecture repo) and the agnostic requirement
+parameters defined in [`schemas/{{CAPABILITY_NAME}}-input-v1.schema.json`](./schemas/{{CAPABILITY_NAME}}-input-v1.schema.json).
+See [`examples/`](./examples/) for minimal runnable requests per platform.
+
+Consumers pin an explicit `buildingBlock.version` — floating references (`latest`, a branch, `main`)
+are prohibited (`VER-004`).
+
+## Requirements
+
+`requirements` is nested by category — `requirements.<category>.<property>` — grouped under the
+fixed, cross-IBB categories defined in
+[`requirement-dictionary/requirement-properties.yaml`](../requirement-dictionary/requirement-properties.yaml).
+
+{{REQUIREMENT_CATEGORY_SECTIONS}}
+
+## Dependencies
+
+{{DEPENDENCIES_LIST}}
+
+## Contributing
+
+Write access is gated by [`CODEOWNERS`](./CODEOWNERS). Trunk-based, small PRs, conventional commits.
+See [`docs/runbook.md`](./docs/runbook.md) for support and escalation.

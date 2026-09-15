@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dns-record-output-v1",
+  "title": "DNS Record IBB - standardized output contract",
+  "type": "object",
+  "required": ["requestId", "executionId", "status", "buildingBlock"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "executionId": { "type": "string" },
+    "status": {
+      "description": "Shared status vocabulary across every IBB (05-standards-contracts.md §10). 'partially completed' exists deliberately: an interface that cannot distinguish it from failure produces orphaned resources nobody owns.",
+      "enum": [
+        "accepted",
+        "validating",
+        "waiting",
+        "executing",
+        "verifying",
+        "completed",
+        "rejected",
+        "failed",
+        "partially completed",
+        "cancelled"
+      ]
+    },
+    "buildingBlock": {
+      "type": "object",
+      "required": ["name", "version", "implementation"],
+      "properties": {
+        "name": { "const": "dns-record" },
+        "version": { "type": "string" },
+        "implementation": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "description": "Present when status is completed or partially completed. resourceId and operationalState are the baseline every capability returns; recordId and fqdn are dns-record's capability-specific fields agreed per scaffold-ibb SKILL.md §1b.",
+      "properties": {
+        "resourceId": { "type": "string" },
+        "operationalState": { "type": "string" },
+        "recordId": {
+          "type": "string",
+          "description": "The provider's identifier for the created/modified record (e.g. Route 53 record set id: zoneId_name_type)."
+        },
+        "fqdn": {
+          "type": "string",
+          "description": "The record's fully-qualified domain name."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Never contains secrets (SEC-006).",
+      "properties": {
+        "deploymentRecord": { "type": "string" },
+        "complianceResult": { "enum": ["passed", "failed", "not-applicable"] },
+        "evidenceLocation": { "type": "string" }
+      }
+    },
+    "error": { "$ref": "ibb-error-v1.schema.json" }
+  }
+}

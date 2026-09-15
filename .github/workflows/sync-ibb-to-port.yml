@@ -1,0 +1,166 @@
+name: Sync IBBs to Port
+
+# Publishes every Infrastructure Building Block in this repo into the Port catalog.
+#
+# Two gates, matching iac-governance-model/06-guardrails-control-points.md:
+#   - pull_request -> validate only (G1). No credentials needed, so it also runs on forks.
+#   - push to the default branch (i.e. a merged PR) -> the real sync.
+#
+# The sync is idempotent (upsert + merge), so re-running is always safe and every IBB is
+# synced rather than only the changed ones — that avoids fragile diff logic against shallow
+# clones, at the cost of a few extra API calls.
+
+on:
+  pull_request:
+    paths:
+      - "**/ibb-manifest.yaml"
+      - "**/reference-designs/**"
+      - "**/security-blueprints/**"
+      - "**/policies/**"
+      - "**/pipelines/**"
+      - "**/schemas/**"
+      - "**/docs/runbook.md"
+      - "**/README.md"
+      - "**/CHANGELOG.md"
+      - "**/VERSIONS.md"
+      - "**/requirement-properties.yaml"
+      - ".claude/skills/sync-ibb-to-port/**"
+      - ".github/workflows/sync-ibb-to-port.yml"
+  push:
+    branches: [main, master]
+    paths:
+      - "**/ibb-manifest.yaml"
+      - "**/reference-designs/**"
+      - "**/security-blueprints/**"
+      - "**/policies/**"
+      - "**/pipelines/**"
+      - "**/schemas/**"
+      - "**/docs/runbook.md"
+      - "**/README.md"
+      - "**/CHANGELOG.md"
+      - "**/VERSIONS.md"
+      - "**/requirement-properties.yaml"
+      - ".claude/skills/sync-ibb-to-port/**"
+      - ".github/workflows/sync-ibb-to-port.yml"
+  workflow_dispatch:
+    inputs:
+      ibb_dir:
+        description: "Single IBB directory to sync (blank = all)"
+        required: false
+        type: string
+      lifecycle_stage:
+        description: "Lifecycle stage to record on the building block"
+        required: false
+        default: pilot
+        type: choice
+        options: [pilot, general-availability, deprecated, retired]
+
+permissions:
+  contents: read
+
+# Never let two syncs write the catalog at once.
+concurrency:
+  group: sync-ibb-to-port-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SYNC: .claude/skills/sync-ibb-to-port/scripts/sync_ibb_to_port.py
+
+jobs:
+  validate:
+    name: Validate IBBs (dry run)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Dry-run every IBB
+        run: |
+          set -euo pipefail
+          mapfile -t manifests < <(find . -name ibb-manifest.yaml -not -path './.claude/*' | sort)
+          if [ ${#manifests[@]} -eq 0 ]; then
+            echo "No ibb-manifest.yaml found — nothing to validate."
+            exit 0
+          fi
+          failed=0
+          for manifest in "${manifests[@]}"; do
+            dir="$(dirname "$manifest")"
+            echo "::group::$dir"
+            if ! python3 "$SYNC" --ibb-dir "$dir" --dry-run; then
+              echo "::error file=$manifest::IBB failed validation — see the log above"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+  sync:
+    name: Sync IBBs to Port
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: port
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Check credentials are configured
+        env:
+          PORT_CLIENT_ID: ${{ secrets.PORT_CLIENT_ID }}
+          PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
+        run: |
+          if [ -z "${PORT_CLIENT_ID}" ] || [ -z "${PORT_CLIENT_SECRET}" ]; then
+            echo "::error::PORT_CLIENT_ID and PORT_CLIENT_SECRET must be set as repository or environment secrets."
+            exit 1
+          fi
+
+      - name: Sync
+        env:
+          # Real environment variables take precedence over any .env, so CI never reads one.
+          PORT_CLIENT_ID: ${{ secrets.PORT_CLIENT_ID }}
+          PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
+          # Unset for EU (app.port.io / app.getport.io). US accounts set https://api.us.port.io
+          PORT_API_BASE_URL: ${{ vars.PORT_API_BASE_URL }}
+          ONLY_DIR: ${{ inputs.ibb_dir }}
+          STAGE: ${{ inputs.lifecycle_stage || 'pilot' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ONLY_DIR}" ]; then
+            if [ ! -f "${ONLY_DIR}/ibb-manifest.yaml" ]; then
+              echo "::error::${ONLY_DIR} has no ibb-manifest.yaml"
+              exit 1
+            fi
+            manifests=("${ONLY_DIR}/ibb-manifest.yaml")
+          else
+            mapfile -t manifests < <(find . -name ibb-manifest.yaml -not -path './.claude/*' | sort)
+          fi
+          if [ ${#manifests[@]} -eq 0 ]; then
+            echo "No ibb-manifest.yaml found — nothing to sync."
+            exit 0
+          fi
+          failed=0
+          for manifest in "${manifests[@]}"; do
+            dir="$(dirname "$manifest")"
+            echo "::group::$dir"
+            if python3 "$SYNC" --ibb-dir "$dir" --lifecycle-stage "$STAGE"; then
+              echo "$dir synced" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error file=$manifest::sync failed — see the log above"
+              echo "$dir FAILED" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed

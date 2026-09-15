@@ -1,0 +1,34 @@
+# {{CAPABILITY_TITLE}} — {{PLATFORM_TITLE}} Security Blueprint
+
+- **Scope:** {{CAPABILITY_NAME}} on {{PLATFORM}}
+- **Paired Technical Reference Design:** `reference-designs/{{PLATFORM}}/reference-design.md@{{VERSION}}`
+- **Status:** draft
+- **Owner:** {{OWNER_TEAM}}
+
+<!-- Every control below needs a real, checkable verification method before this leaves draft.
+     A control without a verification method must not be published (SEC-002). Do not publish
+     placeholder rows as if they were real controls. -->
+
+## Controls
+
+| ID | Domain | Requirement | Priority | Rationale | Verification Method | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| {{PLATFORM_PREFIX}}-001 | Identity & Access | <!-- e.g. workload identity federation only, no static credentials --> | Critical | <!-- why --> | <!-- e.g. policy-as-code check `policies/{{PLATFORM}}/...` --> | Planned |
+| {{PLATFORM_PREFIX}}-002 | Data Protection | <!-- e.g. encryption at rest with approved key management --> | Critical | | | Planned |
+| {{PLATFORM_PREFIX}}-003 | Network Security | <!-- e.g. no public network access --> | High | | | Planned |
+| {{PLATFORM_PREFIX}}-004 | Logging & Monitoring | <!-- e.g. diagnostic/audit logging enabled and forwarded --> | High | | | Planned |
+
+<!-- Add rows per security domain that applies: Identity & Access, Network Security, Data
+     Protection, Logging & Monitoring, Vulnerability Management, Secrets Management, Compliance,
+     Incident Response, Platform Hardening, Supply Chain Security. Priority is risk-based
+     (likelihood x impact) — not everything is Critical. -->
+
+## Verification
+
+Controls above are:
+
+1. **Implemented** in `iac/{{PLATFORM}}/` — each Terraform resource annotated with the control ID
+   it satisfies (`# SBP {{PLATFORM_PREFIX}}-001`), per `ART-005`.
+2. **Verified pre-apply** by policy-as-code in `policies/{{PLATFORM}}/` (`SEC-004`).
+3. **Verified post-apply** by the pipeline re-checking live resource state, not just the Terraform
+   plan — a successful `apply` is not evidence of conformance on its own (`SEC-005`).
