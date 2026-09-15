@@ -225,7 +225,7 @@ def verification_stages(text: str) -> list[str]:
 def parse_rego(text: str) -> tuple[int, list[str]]:
     """Return (deny rule count, referenced control IDs) for a rego policy file."""
     rules = len(re.findall(r"^\s*deny\b.*\{", text, re.M))
-    ids = re.findall(r"SBP\s+([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+-\d{3})", text)
+    ids = re.findall(r"SBP\s+([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3})", text)
     return rules, sorted(set(ids))
 
 
