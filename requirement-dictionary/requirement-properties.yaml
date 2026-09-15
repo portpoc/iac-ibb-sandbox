@@ -32,6 +32,12 @@ categories:
           Access-frequency tier; maps to the provider's storage class / access tier
           (e.g. S3 storage class, Azure Blob access tier).
         usedBy: [object-storage]
+      cidrBlock:
+        type: string
+        description: >
+          Address space allocated to a network segment, in CIDR notation (e.g. "10.0.1.0/24").
+          Maps to the provider's subnet CIDR-block attribute.
+        usedBy: [subnet]
 
   access:
     description: >
@@ -44,6 +50,13 @@ categories:
           Who can read the resource's data: only identities granted via the identity dependency,
           any principal within the org, or anonymous/public read.
         usedBy: [object-storage]
+      networkExposure:
+        type: string
+        enum: [private, public]
+        description: >
+          Whether the network segment routes egress via a public gateway (public) or stays
+          internal-only, with no direct route to the public internet (private).
+        usedBy: [subnet]
 
   resilience:
     description: >
@@ -60,6 +73,14 @@ categories:
           Optional lifecycle expiry: data older than this is automatically deleted. Omitted means
           no automatic expiry.
         usedBy: [object-storage]
+      availabilityZoneIndex:
+        type: integer
+        minimum: 0
+        description: >
+          Ordinal zone placement within the region (0, 1, 2, ...), mapped internally per platform
+          to the actual zone identifier (e.g. "us-east-1a", "westeurope-1"). Kept ordinal, not a
+          literal zone name, so the same value is agnostic across platforms and regions.
+        usedBy: [subnet]
 
   security:
     description: >
@@ -72,6 +93,14 @@ categories:
           Whether a customer-managed key (via the key-management IBB) is mandatory, vs.
           platform-default encryption.
         usedBy: [object-storage]
+      networkAclProfile:
+        type: string
+        enum: [default, restrictive]
+        description: >
+          Baseline network ACL / NSG posture applied to the network segment: the platform's
+          standard default rule set, or an explicit restrictive rule set scoped to the parent
+          network's own address space only.
+        usedBy: [subnet]
 
   operations:
     description: >
@@ -108,3 +137,11 @@ categories:
           The record's target value(s) — IP address(es) for A, a hostname for CNAME, or
           string content for TXT.
         usedBy: [dns-record]
+      parentNetworkId:
+        type: string
+        description: >
+          Identifier of the parent virtual network (VPC/VNet) this network segment is created
+          within, resolved via the virtual-network capability dependency. Not a vendor SKU — just
+          the parent resource's own identifier/name, resolved internally to the provider's lookup
+          mechanism (e.g. a VPC id, a VNet resource id).
+        usedBy: [subnet]

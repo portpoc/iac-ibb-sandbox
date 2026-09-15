@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "subnet-input-v1",
+  "title": "Subnet IBB - agnostic input contract",
+  "type": "object",
+  "required": ["request", "buildingBlock", "context", "requirements"],
+  "additionalProperties": false,
+  "properties": {
+    "request": {
+      "type": "object",
+      "required": ["operation", "requestId"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "enum": ["validate", "create", "read", "upgrade", "delete"] },
+        "requestId": { "type": "string", "pattern": "^req-[A-Za-z0-9._-]{4,}$" }
+      }
+    },
+    "buildingBlock": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "subnet" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": [
+        "applicationId",
+        "environment",
+        "platform",
+        "costCenter",
+        "dataClassification",
+        "requesterIdentity",
+        "correlationId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "applicationId": { "type": "string", "pattern": "^APP-[0-9]{3,}$" },
+        "environment": { "enum": ["dev", "qua", "tst", "ppr", "prd"] },
+        "platform": { "enum": ["aws", "azure"] },
+        "region": { "type": "string" },
+        "costCenter": { "type": "string" },
+        "dataClassification": { "enum": ["internal", "confidential"] },
+        "requesterIdentity": {
+          "type": "string",
+          "description": "Authenticated caller identity (a non-human identity for automation) (CON-009)."
+        },
+        "correlationId": {
+          "type": "string",
+          "description": "End-to-end traceability across portal, orchestrator, pipeline, IaC, resource (CON-009, EVD-003)."
+        },
+        "changeReference": {
+          "type": "string",
+          "description": "Approved change record reference. Required by policy for environment: prd (SBP AWS-006/AZR-006); enforced conditionally in the pipeline, not the schema."
+        }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "description": "Agnostic, capability-specific knobs, nested by the fixed high-level categories (sizing/access/resilience/security/operations) from requirement-dictionary/requirement-properties.yaml, per scaffold-ibb SKILL.md §1b. Do NOT put dataClassification here — it is a mandatory context field, already required above.",
+      "required": ["sizing", "access", "resilience", "security", "operations"],
+      "additionalProperties": false,
+      "properties": {
+        "sizing": {
+          "type": "object",
+          "required": ["cidrBlock"],
+          "additionalProperties": false,
+          "properties": {
+            "cidrBlock": {
+              "type": "string",
+              "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$",
+              "description": "Address space allocated to this subnet within the parent network, in CIDR notation (e.g. \"10.0.1.0/24\")."
+            }
+          }
+        },
+        "access": {
+          "type": "object",
+          "required": ["networkExposure"],
+          "additionalProperties": false,
+          "properties": {
+            "networkExposure": {
+              "type": "string",
+              "enum": ["private", "public"],
+              "description": "Whether the subnet routes egress via a public gateway (public) or stays internal-only (private)."
+            }
+          }
+        },
+        "resilience": {
+          "type": "object",
+          "required": ["availabilityZoneIndex"],
+          "additionalProperties": false,
+          "properties": {
+            "availabilityZoneIndex": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Ordinal zone placement within the region; mapped internally per platform to the actual zone identifier."
+            }
+          }
+        },
+        "security": {
+          "type": "object",
+          "required": ["networkAclProfile"],
+          "additionalProperties": false,
+          "properties": {
+            "networkAclProfile": {
+              "type": "string",
+              "enum": ["default", "restrictive"],
+              "description": "Baseline NACL/NSG posture applied to the subnet."
+            }
+          }
+        },
+        "operations": {
+          "type": "object",
+          "required": ["parentNetworkId"],
+          "additionalProperties": false,
+          "properties": {
+            "parentNetworkId": {
+              "type": "string",
+              "description": "Identifier of the parent virtual network (VPC/VNet) this subnet is created within, resolved via the virtual-network capability dependency."
+            }
+          }
+        }
+      }
+    }
+  }
+}

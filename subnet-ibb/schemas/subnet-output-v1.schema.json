@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "subnet-output-v1",
+  "title": "Subnet IBB - standardized output contract",
+  "type": "object",
+  "required": ["requestId", "executionId", "status", "buildingBlock"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "executionId": { "type": "string" },
+    "status": {
+      "description": "Shared status vocabulary across every IBB (05-standards-contracts.md §10). 'partially completed' exists deliberately: an interface that cannot distinguish it from failure produces orphaned resources nobody owns.",
+      "enum": [
+        "accepted",
+        "validating",
+        "waiting",
+        "executing",
+        "verifying",
+        "completed",
+        "rejected",
+        "failed",
+        "partially completed",
+        "cancelled"
+      ]
+    },
+    "buildingBlock": {
+      "type": "object",
+      "required": ["name", "version", "implementation"],
+      "properties": {
+        "name": { "const": "subnet" },
+        "version": { "type": "string" },
+        "implementation": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "description": "Present when status is completed or partially completed. resourceId and operationalState are the baseline every capability returns; subnetId/cidrBlock/availabilityZone/routeTableId are subnet's capability-specific fields agreed per scaffold-ibb SKILL.md §1b.",
+      "properties": {
+        "resourceId": { "type": "string" },
+        "operationalState": { "type": "string" },
+        "subnetId": {
+          "type": "string",
+          "description": "The provider's identifier for the created/modified subnet (e.g. an AWS subnet id or an Azure subnet resource id)."
+        },
+        "cidrBlock": {
+          "type": "string",
+          "description": "The subnet's actual allocated CIDR block, as provisioned."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The actual resolved zone identifier (e.g. \"us-east-1a\") the availabilityZoneIndex mapped to. Not returned for platforms/subnets that are zone-agnostic."
+        },
+        "routeTableId": {
+          "type": "string",
+          "description": "The identifier of the route table associated with this subnet."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Never contains secrets (SEC-006).",
+      "properties": {
+        "deploymentRecord": { "type": "string" },
+        "complianceResult": { "enum": ["passed", "failed", "not-applicable"] },
+        "evidenceLocation": { "type": "string" }
+      }
+    },
+    "error": { "$ref": "ibb-error-v1.schema.json" }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ibb-error-v1",
+  "title": "IBB - shared structured error contract",
+  "type": "object",
+  "required": ["code", "category", "message", "retryable", "failedStage"],
+  "properties": {
+    "code": { "type": "string", "pattern": "^IBB-[A-Z]+-[0-9]{3}$" },
+    "category": { "enum": ["validation", "authorization", "execution", "verification", "internal"] },
+    "message": { "type": "string" },
+    "retryable": { "type": "boolean" },
+    "failedStage": { "type": "string" },
+    "remediation": { "type": "object", "properties": { "action": { "type": "string" } } },
+    "correlationId": { "type": "string" }
+  }
+}

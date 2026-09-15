@@ -1,0 +1,36 @@
+{
+  "request": {
+    "operation": "create",
+    "requestId": "req-example-0002"
+  },
+  "buildingBlock": {
+    "name": "subnet",
+    "version": "0.1.0"
+  },
+  "context": {
+    "applicationId": "APP-1234",
+    "environment": "dev",
+    "platform": "azure",
+    "costCenter": "example-cost-center",
+    "dataClassification": "internal",
+    "requesterIdentity": "svc-example-caller",
+    "correlationId": "corr-example-0002"
+  },
+  "requirements": {
+    "sizing": {
+      "cidrBlock": "10.1.1.0/24"
+    },
+    "access": {
+      "networkExposure": "public"
+    },
+    "resilience": {
+      "availabilityZoneIndex": 0
+    },
+    "security": {
+      "networkAclProfile": "restrictive"
+    },
+    "operations": {
+      "parentNetworkId": "vnet-example-hub"
+    }
+  }
+}

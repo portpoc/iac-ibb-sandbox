@@ -1,0 +1,100 @@
+apiVersion: infrastructure.dsv/v1
+kind: InfrastructureBuildingBlock
+
+metadata:
+  name: subnet
+  version: 0.1.0
+  owner: cloud-foundations
+  status: draft   # draft -> in-review -> approved (G3 release gate outcome; do not hand-set to approved)
+  support: "cloud-foundations@dsv.com"
+
+# The agnostic contract consumers code against. Stable across implementations (CON-004).
+contract:
+  interface:
+    type: pipeline
+    implementation: [github-actions]
+  operations:
+    - validate
+    - create
+    - read
+    - upgrade
+    - delete
+  schemas:
+    input: schemas/subnet-input-v1.schema.json
+    output: schemas/subnet-output-v1.schema.json
+    error: schemas/ibb-error-v1.schema.json
+  execution:
+    asynchronous: false   # set true and add status polling if operations are long-running (CON-006)
+    idempotencyKey: request.requestId
+
+# An IBB version pins an EXACT, tested combination of all four components, per supported
+# deployment context. Consumers never assemble these themselves (ART-002, VER-002).
+implementations:
+  aws:
+    technology: "Amazon VPC Subnet (aws_subnet)"
+    referenceDesign: reference-designs/aws/reference-design.md
+    securityBlueprint: security-blueprints/aws/security-blueprint.md
+    iac: iac/aws
+    minVersion: "0.1.0"
+  azure:
+    technology: "Azure Virtual Network Subnet (azurerm_subnet)"
+    referenceDesign: reference-designs/azure/reference-design.md
+    securityBlueprint: security-blueprints/azure/security-blueprint.md
+    iac: iac/azure
+    minVersion: "0.1.0"
+
+# Every dependency on another capability is declared explicitly; consumers never orchestrate
+# an IBB's internal dependencies (ART-006).
+dependencies:
+  - virtual-network
+  - identity
+
+# Maps agnostic requirement to the provider. Nested by the same fixed high-level categories as
+# requirements.<category>.<property> in the input schema (requirementMapping.<platform>.<category>.<property>),
+# so the translation table's shape mirrors the request it's translating.
+# This translation lives INSIDE the IBB, never in the consumer request (CON-002).
+requirementMapping:
+  aws:
+    dataClassification: "context.dataClassification is passed through as a tag only (data:classification); subnets carry no data themselves, so no plan-time policy rejects any value here."
+    sizing:
+      cidrBlock:
+        terraformVariable: cidr_block
+        notes: "Passed through 1:1 as the aws_subnet cidr_block attribute."
+    access:
+      networkExposure:
+        terraformVariable: network_exposure
+        notes: "'public' associates the subnet with the VPC's public route table (default route to the Internet Gateway) and sets map_public_ip_on_launch = true; 'private' associates with the private route table and sets map_public_ip_on_launch = false (SBP AWS-002, AWS-003)."
+    resilience:
+      availabilityZoneIndex:
+        terraformVariable: availability_zone_index
+        notes: "Resolved via data.aws_availability_zones (state = available) and indexed ordinally, so the same integer value is portable across regions."
+    security:
+      networkAclProfile:
+        terraformVariable: network_acl_profile
+        notes: "'restrictive' creates a dedicated aws_network_acl scoped to the parent VPC's own CIDR only; 'default' leaves the subnet associated with the VPC's default NACL (SBP AWS-005)."
+    operations:
+      parentNetworkId:
+        terraformVariable: vpc_id
+        notes: "The AWS VPC id this subnet is created within; resolved via the virtual-network capability's output, passed through 1:1."
+  azure:
+    dataClassification: "context.dataClassification is passed through as a tag only (data:classification); subnets carry no data themselves, so no plan-time policy rejects any value here."
+    sizing:
+      cidrBlock:
+        terraformVariable: address_prefix
+        notes: "Passed through 1:1 as the azurerm_subnet address_prefixes[0] attribute."
+    access:
+      networkExposure:
+        terraformVariable: network_exposure
+        notes: "'public' associates an NSG allowing internet-bound traffic and a route table with a default route to an Internet-facing next hop; 'private' associates an NSG that denies internet-bound traffic and forces default egress through the parent network's approved egress path (SBP AZR-002, AZR-003)."
+    resilience:
+      availabilityZoneIndex:
+        terraformVariable: availability_zone_index
+        notes: "Azure subnets themselves are zone-agnostic (zones apply to the resources placed inside them); this value is carried through as a tag for downstream zone-aware placement decisions, not a subnet-level Terraform attribute."
+    security:
+      networkAclProfile:
+        terraformVariable: network_acl_profile
+        notes: "'restrictive' creates a dedicated azurerm_network_security_group with an explicit deny-by-default rule set scoped to the parent VNet's own address space; 'default' associates the platform's baseline NSG (SBP AZR-005)."
+    operations:
+      parentNetworkId:
+        terraformVariable: virtual_network_name
+        notes: "The Azure VNet name this subnet is created within (plus its resource group, supplied separately); resolved via the virtual-network capability's output, passed through 1:1."

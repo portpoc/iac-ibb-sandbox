@@ -1,0 +1,353 @@
+name: Subnet IBB
+
+# Standardized execution interface (ibb-api-pipeline-component.md §10 pipeline execution stages).
+# The external contract (inputs/outputs/operations/status/error model) must stay stable even if
+# this engine is replaced (CON-004) — do not let consumers depend on anything below except the
+# request/output shape defined in schemas/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "Path to a JSON request file matching schemas/subnet-input-v1.schema.json"
+        required: true
+
+concurrency:
+  # Idempotency: serialize re-runs of the same requestId rather than racing duplicate infrastructure (CON-007).
+  group: subnet-${{ github.event.inputs.request }}
+
+env:
+  IBB_NAME: subnet
+  IBB_VERSION: "0.1.0" # must match ibb-manifest.yaml metadata.version; checked in stage 3
+  WORKDIR: subnet-ibb
+
+defaults:
+  run:
+    working-directory: subnet-ibb
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Assign an execution id (distinct from the caller's requestId) for this run.
+      - name: Assign execution id
+        id: exec
+        run: 'echo "execution_id=exec-$(date +%s)-${{ github.run_id }}" >> "$GITHUB_OUTPUT"'
+
+      # 2. Validate the request against the input schema. This is the ONLY structural gate —
+      #    anything the schema can't express (version/platform pinning) is checked in stage 3.
+      - name: Install validator
+        run: pip install check-jsonschema==0.29.* yq
+
+      - name: Validate request against schema
+        run: |
+          check-jsonschema \
+            --schemafile schemas/subnet-input-v1.schema.json \
+            "${{ github.event.inputs.request }}"
+
+      # 3. The two things a shared JSON schema cannot express: pinned IBB version matches this
+      #    pipeline, and the requested platform has an approved implementation in the manifest.
+      - name: Check pinned version and implementation
+        id: pin
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQ_VERSION=$(jq -r '.buildingBlock.version' "$REQ")
+          REQ_PLATFORM=$(jq -r '.context.platform' "$REQ")
+
+          if [ "$REQ_VERSION" != "$IBB_VERSION" ]; then
+            echo "::error::buildingBlock.version ($REQ_VERSION) does not match the pinned pipeline version ($IBB_VERSION). VER-004 prohibits floating references."
+            exit 1
+          fi
+
+          IMPL=$(yq -o=json '.implementations' ibb-manifest.yaml | jq -r --arg p "$REQ_PLATFORM" '.[$p] // empty')
+          if [ -z "$IMPL" ]; then
+            echo "::error::platform '$REQ_PLATFORM' has no implementation declared in ibb-manifest.yaml"
+            exit 1
+          fi
+          echo "platform=$REQ_PLATFORM" >> "$GITHUB_OUTPUT"
+
+      # 4. Authorize requested operation against capability + environment (SEC-007). SBP
+      #    AWS-006/AZR-006: a prd request must carry an approved changeReference before anything
+      #    else runs.
+      - name: Authorize operation
+        id: authz
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          OPERATION=$(jq -r '.request.operation' "$REQ")
+          ENVIRONMENT=$(jq -r '.context.environment' "$REQ")
+          CHANGE_REF=$(jq -r '.context.changeReference // empty' "$REQ")
+
+          if [ "$ENVIRONMENT" = "prd" ] && [ -z "$CHANGE_REF" ]; then
+            echo "::error::SBP AWS-006/AZR-006: context.changeReference is required for environment: prd"
+            exit 1
+          fi
+
+          echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      # 5. Resolve implementation + map requirements.<category>.<property> (and
+      #    context.dataClassification) through ibb-manifest.yaml's requirementMapping into
+      #    Terraform variables (CON-002: this translation lives inside the IBB, never in the
+      #    consumer request). requirementMapping.<platform> mirrors the same category nesting as
+      #    the request.
+      - name: Resolve requirement mapping into IaC vars
+        id: map
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          PLATFORM="${{ steps.pin.outputs.platform }}"
+
+          if [ "$PLATFORM" = "aws" ]; then
+            cat <<EOF > iac/aws/terraform.tfvars.json
+          {
+            "application_id": $(jq '.context.applicationId' "$REQ"),
+            "environment": $(jq '.context.environment' "$REQ"),
+            "data_classification": $(jq '.context.dataClassification' "$REQ"),
+            "vpc_id": $(jq '.requirements.operations.parentNetworkId' "$REQ"),
+            "cidr_block": $(jq '.requirements.sizing.cidrBlock' "$REQ"),
+            "network_exposure": $(jq '.requirements.access.networkExposure' "$REQ"),
+            "availability_zone_index": $(jq '.requirements.resilience.availabilityZoneIndex' "$REQ"),
+            "network_acl_profile": $(jq '.requirements.security.networkAclProfile' "$REQ")
+          }
+          EOF
+            cat iac/aws/terraform.tfvars.json
+          else
+            # SBP AZR-006: the Azure implementation additionally needs the parent VNet's resource
+            # group, which the virtual-network capability's output resolves alongside its VNet
+            # name — not a separate consumer-facing input. This lookup step is a placeholder for
+            # the org's actual virtual-network capability call/output-fetch mechanism.
+            RESOURCE_GROUP="rg-$(jq -r '.requirements.operations.parentNetworkId' "$REQ")"
+            cat <<EOF > iac/azure/terraform.tfvars.json
+          {
+            "application_id": $(jq '.context.applicationId' "$REQ"),
+            "environment": $(jq '.context.environment' "$REQ"),
+            "data_classification": $(jq '.context.dataClassification' "$REQ"),
+            "virtual_network_name": $(jq '.requirements.operations.parentNetworkId' "$REQ"),
+            "resource_group_name": "$RESOURCE_GROUP",
+            "address_prefix": $(jq '.requirements.sizing.cidrBlock' "$REQ"),
+            "network_exposure": $(jq '.requirements.access.networkExposure' "$REQ"),
+            "availability_zone_index": $(jq '.requirements.resilience.availabilityZoneIndex' "$REQ"),
+            "network_acl_profile": $(jq '.requirements.security.networkAclProfile' "$REQ")
+          }
+          EOF
+            cat iac/azure/terraform.tfvars.json
+          fi
+
+      # 6. Short-circuit on validate: schema + version/platform + authZ checks above ARE the
+      #    validation for this operation — nothing to provision.
+      - name: Compose validate-only output
+        if: steps.authz.outputs.operation == 'validate'
+        run: |
+          jq -n \
+            --arg requestId "$(jq -r '.request.requestId' '${{ github.event.inputs.request }}')" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg version "$IBB_VERSION" \
+            --arg impl "${{ steps.pin.outputs.platform }}" \
+            '{requestId: $requestId, executionId: $executionId, status: "completed",
+              buildingBlock: {name: "subnet", version: $version, implementation: $impl}}' \
+            > output.json
+
+      # 7. Retrieve scoped execution credentials via OIDC — never a long-lived static credential,
+      #    and never hand privileged credentials to the caller (SEC-006, SEC-007, SBP AWS-001/AZR-001).
+      - name: Retrieve AWS execution credentials
+        if: steps.authz.outputs.operation != 'validate' && steps.pin.outputs.platform == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.SUBNET_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.SUBNET_AWS_REGION || 'us-east-1' }}
+
+      - name: Retrieve Azure execution credentials
+        if: steps.authz.outputs.operation != 'validate' && steps.pin.outputs.platform == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.SUBNET_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.SUBNET_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.SUBNET_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        if: steps.authz.outputs.operation != 'validate'
+        uses: hashicorp/setup-terraform@v3
+
+      # 8-9. Prepare IaC variables/workspace, then run policy-as-code checks PRE-apply (SEC-004).
+      - name: Terraform init/plan
+        if: steps.authz.outputs.operation != 'validate'
+        working-directory: subnet-ibb/iac/${{ steps.pin.outputs.platform }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          if [ "${{ steps.authz.outputs.operation }}" = "delete" ]; then
+            terraform plan -destroy -input=false -out=tfplan
+          else
+            terraform plan -input=false -out=tfplan
+          fi
+          terraform show -json tfplan > tfplan.json
+
+      - name: Install conftest
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          curl -sL https://github.com/open-policy-agent/conftest/releases/download/v0.55.0/conftest_0.55.0_Linux_x86_64.tar.gz | tar xz conftest
+          sudo mv conftest /usr/local/bin/
+
+      - name: Policy check (pre-apply)
+        if: steps.authz.outputs.operation != 'validate'
+        run: conftest test iac/${{ steps.pin.outputs.platform }}/tfplan.json --policy policies/${{ steps.pin.outputs.platform }}/
+
+      # 10. Execute IaC.
+      - name: Terraform apply / destroy
+        if: steps.authz.outputs.operation != 'validate'
+        working-directory: subnet-ibb/iac/${{ steps.pin.outputs.platform }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      # 11. Verify deployed state AND Security Blueprint controls against LIVE resources —
+      #     a successful apply is not evidence of conformance (SEC-005).
+      - name: Verify controls (post-apply) - AWS
+        if: steps.authz.outputs.operation != 'validate' && steps.authz.outputs.operation != 'delete' && steps.pin.outputs.platform == 'aws'
+        working-directory: subnet-ibb/iac/aws
+        run: |
+          set -euo pipefail
+          SUBNET_ID=$(terraform output -raw subnet_id)
+          ROUTE_TABLE_ID=$(terraform output -raw route_table_id)
+          EXPOSURE=$(jq -r '.requirements.access.networkExposure' "../../../${{ github.event.inputs.request }}")
+
+          # SBP AWS-002: confirm the live route table associated with the subnet actually carries
+          # a Tier tag matching the requested exposure.
+          LIVE_TIER=$(aws ec2 describe-route-tables --route-table-ids "$ROUTE_TABLE_ID" \
+            --query "RouteTables[0].Tags[?Key=='Tier'].Value" --output text || echo "")
+          CONTROL_002="fail"
+          [ "$LIVE_TIER" = "$EXPOSURE" ] && CONTROL_002="pass"
+
+          # SBP AWS-004: confirm CloudTrail captured a CreateSubnet/ModifySubnetAttribute event recently.
+          CONTROL_004="fail"
+          EVENTS=$(aws cloudtrail lookup-events \
+            --lookup-attributes AttributeKey=EventName,AttributeValue=CreateSubnet \
+            --max-results 5 --output json || echo '{"Events":[]}')
+          [ "$(echo "$EVENTS" | jq '.Events | length')" -gt 0 ] && CONTROL_004="pass"
+
+          jq -n \
+            --arg c002 "$CONTROL_002" --arg c004 "$CONTROL_004" --arg subnetId "$SUBNET_ID" \
+            '[{control: "AWS-002", result: $c002, detail: "live route table Tier tag matches requested networkExposure"},
+              {control: "AWS-004", result: $c004, detail: "CloudTrail captured CreateSubnet/ModifySubnetAttribute event"}]' \
+            > ../../verification.json
+          cat ../../verification.json
+
+      - name: Verify controls (post-apply) - Azure
+        if: steps.authz.outputs.operation != 'validate' && steps.authz.outputs.operation != 'delete' && steps.pin.outputs.platform == 'azure'
+        working-directory: subnet-ibb/iac/azure
+        run: |
+          set -euo pipefail
+          SUBNET_ID=$(terraform output -raw subnet_id)
+          EXPOSURE=$(jq -r '.requirements.access.networkExposure' "../../../${{ github.event.inputs.request }}")
+
+          # SBP AZR-002: confirm the live NSG's AllowInternetOutbound rule matches requested exposure.
+          NSG_ID=$(az network vnet subnet show --ids "$SUBNET_ID" --query "networkSecurityGroup.id" -o tsv)
+          LIVE_ACCESS=$(az network nsg rule show --nsg-name "$(basename "$NSG_ID")" \
+            --resource-group "$(echo "$NSG_ID" | cut -d'/' -f5)" --name AllowInternetOutbound \
+            --query "access" -o tsv 2>/dev/null || echo "")
+          EXPECTED_ACCESS=$([ "$EXPOSURE" = "public" ] && echo "Allow" || echo "Deny")
+          CONTROL_002="fail"
+          [ "$LIVE_ACCESS" = "$EXPECTED_ACCESS" ] && CONTROL_002="pass"
+
+          # SBP AZR-004: confirm Activity Log captured a write operation for this subnet recently.
+          CONTROL_004="fail"
+          EVENTS=$(az monitor activity-log list --resource-id "$SUBNET_ID" --max-events 5 -o json || echo '[]')
+          [ "$(echo "$EVENTS" | jq 'length')" -gt 0 ] && CONTROL_004="pass"
+
+          jq -n \
+            --arg c002 "$CONTROL_002" --arg c004 "$CONTROL_004" \
+            '[{control: "AZR-002", result: $c002, detail: "live NSG AllowInternetOutbound rule matches requested networkExposure"},
+              {control: "AZR-004", result: $c004, detail: "Activity Log captured a write operation for this subnet"}]' \
+            > ../../verification.json
+          cat ../../verification.json
+
+      # 12-13. Compose evidence and the standardized output, propagating context.correlationId
+      #        through to the evidence record (EVD-001, EVD-002, EVD-003). status must distinguish
+      #        completed / partially completed / failed.
+      - name: Compose evidence and standardized output
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQUEST_ID=$(jq -r '.request.requestId' "$REQ")
+          CORRELATION_ID=$(jq -r '.context.correlationId' "$REQ")
+          OPERATION="${{ steps.authz.outputs.operation }}"
+          PLATFORM="${{ steps.pin.outputs.platform }}"
+
+          STATUS="completed"
+          if [ -f verification.json ] && jq -e 'map(select(.result == "fail")) | length > 0' verification.json > /dev/null; then
+            STATUS="partially completed"
+          fi
+
+          if [ "$OPERATION" = "delete" ]; then
+            RESULT='{}'
+          elif [ "$PLATFORM" = "aws" ]; then
+            RESULT=$(cd iac/aws && jq -n \
+              --arg subnetId "$(terraform output -raw subnet_id)" \
+              --arg cidrBlock "$(terraform output -raw cidr_block)" \
+              --arg availabilityZone "$(terraform output -raw availability_zone)" \
+              --arg routeTableId "$(terraform output -raw route_table_id)" \
+              '{subnetId: $subnetId, cidrBlock: $cidrBlock, availabilityZone: $availabilityZone, routeTableId: $routeTableId, operationalState: "active"}')
+          else
+            RESULT=$(cd iac/azure && jq -n \
+              --arg subnetId "$(terraform output -raw subnet_id)" \
+              --arg cidrBlock "$(terraform output -raw cidr_block)" \
+              --arg routeTableId "$(terraform output -raw route_table_id)" \
+              '{subnetId: $subnetId, cidrBlock: $cidrBlock, routeTableId: $routeTableId, operationalState: "active"}')
+          fi
+
+          jq -n \
+            --arg requestId "$REQUEST_ID" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg status "$STATUS" \
+            --arg version "$IBB_VERSION" \
+            --arg impl "$PLATFORM" \
+            --argjson result "$RESULT" \
+            --arg correlationId "$CORRELATION_ID" \
+            --arg evidenceLocation "verification.json" \
+            '{requestId: $requestId, executionId: $executionId, status: $status,
+              buildingBlock: {name: "subnet", version: $version, implementation: $impl},
+              result: $result,
+              evidence: {complianceResult: (if $status == "completed" then "passed" else "failed" end),
+                         evidenceLocation: $evidenceLocation, deploymentRecord: $correlationId}}' \
+            > output.json
+          cat output.json
+
+      # EVD-004: any failed step above (schema validation, version pin, authorization, policy
+      # gate, apply) must still surface a structured error, not just a red X on the run. This
+      # composes ibb-error-v1.schema.json whenever the job did not reach a successful compose step.
+      - name: Compose error output on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQUEST_ID=$(jq -r '.request.requestId // "unknown"' "$REQ" 2>/dev/null || echo "unknown")
+          CORRELATION_ID=$(jq -r '.context.correlationId // empty' "$REQ" 2>/dev/null || echo "")
+          jq -n \
+            --arg requestId "$REQUEST_ID" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg version "$IBB_VERSION" \
+            --arg correlationId "$CORRELATION_ID" \
+            '{requestId: $requestId, executionId: $executionId, status: "failed",
+              buildingBlock: {name: "subnet", version: $version, implementation: "unknown"},
+              error: {code: "IBB-SUBNET-001", category: "execution",
+                      message: "Pipeline run failed — see the failing step in the GitHub Actions run log for detail.",
+                      retryable: true, failedStage: "${{ job.status }}", correlationId: $correlationId}}' \
+            > output.json
+
+      # 14. Publish standardized outputs as artifacts (success or the shared error contract).
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subnet-output-${{ steps.exec.outputs.execution_id }}
+          path: |
+            subnet-ibb/output.json
+            subnet-ibb/verification.json
+          if-no-files-found: ignore
