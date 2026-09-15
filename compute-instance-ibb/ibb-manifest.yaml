@@ -1,0 +1,82 @@
+apiVersion: infrastructure.dsv/v1
+kind: InfrastructureBuildingBlock
+
+metadata:
+  name: compute-instance
+  version: 0.1.0
+  owner: cloud-foundations
+  status: draft   # draft -> in-review -> approved (G3 release gate outcome; do not hand-set to approved)
+  support: "cloud-foundations@dsv.com"
+
+# The agnostic contract consumers code against. Stable across implementations (CON-004).
+contract:
+  interface:
+    type: pipeline
+    implementation: [github-actions]
+  operations:
+    - validate
+    - create
+    - read
+    - upgrade
+    - delete
+  schemas:
+    input: schemas/compute-instance-input-v1.schema.json
+    output: schemas/compute-instance-output-v1.schema.json
+    error: schemas/ibb-error-v1.schema.json
+  execution:
+    asynchronous: false   # set true and add status polling if operations are long-running (CON-006)
+    idempotencyKey: request.requestId
+
+# An IBB version pins an EXACT, tested combination of all four components, per supported
+# deployment context. Consumers never assemble these themselves (ART-002, VER-002).
+implementations:
+  aws:
+    technology: "Amazon EC2 (aws_instance)"
+    referenceDesign: reference-designs/aws/reference-design.md
+    securityBlueprint: security-blueprints/aws/security-blueprint.md
+    iac: iac/aws
+    minVersion: "0.1.0"
+
+# Every dependency on another capability is declared explicitly; consumers never orchestrate
+# an IBB's internal dependencies (ART-006).
+dependencies:
+  - subnet
+  - identity
+  - key-management
+
+# Maps agnostic requirement to the provider. Nested by the same fixed high-level categories as
+# requirements.<category>.<property> in the input schema (requirementMapping.<platform>.<category>.<property>),
+# so the translation table's shape mirrors the request it's translating.
+# This translation lives INSIDE the IBB, never in the consumer request (CON-002).
+requirementMapping:
+  aws:
+    dataClassification: "context.dataClassification is passed through as a tag only (data:classification); enforced at the security-group/network layer indirectly via networkExposure, not directly rejected by any value here."
+    sizing:
+      computeTier:
+        terraformVariable: compute_tier
+        notes: "Mapped to a specific EC2 instance type internally (small=t3.small, medium=t3.medium, large=t3.large, xlarge=t3.xlarge) — the literal instance type never appears in the agnostic contract."
+    access:
+      networkExposure:
+        terraformVariable: network_exposure
+        notes: "'public' sets associate_public_ip_address = true on the instance's primary network interface; 'private' sets it false. No Internet Gateway/NAT is created here — reachability still depends on the target subnet's own route table (owned by the subnet capability) (SBP AWS-004)."
+    resilience:
+      availabilityZoneIndex:
+        terraformVariable: availability_zone_index
+        notes: "Resolved via data.aws_availability_zones (state = available) and indexed ordinally, so the same integer value is portable across regions. Must resolve to the same zone the target subnet (subnetId) is already placed in — validated post-apply, not plan-time, since it depends on live subnet state."
+      terminationProtection:
+        terraformVariable: termination_protection
+        notes: "Maps 1:1 to aws_instance.disable_api_termination (SBP AWS-006)."
+    security:
+      encryptionRequired:
+        terraformVariable: encryption_required
+        notes: "When true, the root EBS volume's kms_key_id is set to the key-management capability's supplied CMK ARN; when false, the volume still uses default EBS encryption (AWS-wide default), never plaintext (SBP AWS-002)."
+      securityGroupProfile:
+        terraformVariable: security_group_profile
+        notes: "'restrictive' creates a dedicated aws_security_group denying all inbound except from the parent subnet's own CIDR; 'default' creates a baseline security group allowing the platform's standard management ports only (SBP AWS-005)."
+    operations:
+      subnetId:
+        terraformVariable: subnet_id
+        notes: "The AWS subnet id this instance is launched into; resolved via the subnet capability's output, passed through 1:1."
+      osFamily:
+        terraformVariable: os_family
+        notes: "Resolves the launch AMI via an aws_ssm_parameter data source against the platform-approved public parameter path per family (Amazon Linux 2023 for linux, Windows Server for windows) — never a literal, hardcoded AMI id (SBP AWS-001)."

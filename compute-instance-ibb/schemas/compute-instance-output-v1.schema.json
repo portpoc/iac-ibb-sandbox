@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "compute-instance-output-v1",
+  "title": "Compute Instance IBB - standardized output contract",
+  "type": "object",
+  "required": ["requestId", "executionId", "status", "buildingBlock"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "executionId": { "type": "string" },
+    "status": {
+      "description": "Shared status vocabulary across every IBB (05-standards-contracts.md §10). 'partially completed' exists deliberately: an interface that cannot distinguish it from failure produces orphaned resources nobody owns.",
+      "enum": [
+        "accepted",
+        "validating",
+        "waiting",
+        "executing",
+        "verifying",
+        "completed",
+        "rejected",
+        "failed",
+        "partially completed",
+        "cancelled"
+      ]
+    },
+    "buildingBlock": {
+      "type": "object",
+      "required": ["name", "version", "implementation"],
+      "properties": {
+        "name": { "const": "compute-instance" },
+        "version": { "type": "string" },
+        "implementation": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "description": "Present when status is completed or partially completed. resourceId and operationalState are the baseline every capability returns; instanceId/privateIp/publicIp/availabilityZone are compute-instance's capability-specific fields agreed per scaffold-ibb SKILL.md §1b.",
+      "properties": {
+        "resourceId": { "type": "string" },
+        "operationalState": { "type": "string" },
+        "instanceId": {
+          "type": "string",
+          "description": "The provider's identifier for the created/modified instance (e.g. an AWS instance id)."
+        },
+        "privateIp": {
+          "type": "string",
+          "description": "The instance's private IP address."
+        },
+        "publicIp": {
+          "type": ["string", "null"],
+          "description": "The instance's public IP address; null when networkExposure is private."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The actual resolved zone identifier (e.g. \"us-east-1a\") the availabilityZoneIndex mapped to."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Never contains secrets (SEC-006).",
+      "properties": {
+        "deploymentRecord": { "type": "string" },
+        "complianceResult": { "enum": ["passed", "failed", "not-applicable"] },
+        "evidenceLocation": { "type": "string" }
+      }
+    },
+    "error": { "$ref": "ibb-error-v1.schema.json" }
+  }
+}

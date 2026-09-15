@@ -1,0 +1,39 @@
+{
+  "request": {
+    "operation": "delete",
+    "requestId": "req-test-delete-0001"
+  },
+  "buildingBlock": {
+    "name": "compute-instance",
+    "version": "0.1.0"
+  },
+  "context": {
+    "applicationId": "APP-1234",
+    "environment": "dev",
+    "platform": "aws",
+    "costCenter": "example-cost-center",
+    "dataClassification": "internal",
+    "requesterIdentity": "svc-example-caller",
+    "correlationId": "corr-test-delete-0001"
+  },
+  "requirements": {
+    "sizing": {
+      "computeTier": "small"
+    },
+    "access": {
+      "networkExposure": "private"
+    },
+    "resilience": {
+      "availabilityZoneIndex": 0,
+      "terminationProtection": false
+    },
+    "security": {
+      "encryptionRequired": true,
+      "securityGroupProfile": "default"
+    },
+    "operations": {
+      "subnetId": "subnet-0123456789abcdef0",
+      "osFamily": "linux"
+    }
+  }
+}

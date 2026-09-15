@@ -1,0 +1,328 @@
+name: Compute Instance IBB
+
+# Standardized execution interface (ibb-api-pipeline-component.md §10 pipeline execution stages).
+# The external contract (inputs/outputs/operations/status/error model) must stay stable even if
+# this engine is replaced (CON-004) — do not let consumers depend on anything below except the
+# request/output shape defined in schemas/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "Path to a JSON request file matching schemas/compute-instance-input-v1.schema.json"
+        required: true
+
+concurrency:
+  # Idempotency: serialize re-runs of the same requestId rather than racing duplicate infrastructure (CON-007).
+  group: compute-instance-${{ github.event.inputs.request }}
+
+env:
+  IBB_NAME: compute-instance
+  IBB_VERSION: "0.1.0" # must match ibb-manifest.yaml metadata.version; checked in stage 3
+  WORKDIR: compute-instance-ibb
+
+defaults:
+  run:
+    working-directory: compute-instance-ibb
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Assign an execution id (distinct from the caller's requestId) for this run.
+      - name: Assign execution id
+        id: exec
+        run: 'echo "execution_id=exec-$(date +%s)-${{ github.run_id }}" >> "$GITHUB_OUTPUT"'
+
+      # 2. Validate the request against the input schema. This is the ONLY structural gate —
+      #    anything the schema can't express (version/platform pinning) is checked in stage 3.
+      - name: Install validator
+        run: pip install check-jsonschema==0.29.* yq
+
+      - name: Validate request against schema
+        run: |
+          check-jsonschema \
+            --schemafile schemas/compute-instance-input-v1.schema.json \
+            "${{ github.event.inputs.request }}"
+
+      # 3. The two things a shared JSON schema cannot express: pinned IBB version matches this
+      #    pipeline, and the requested platform has an approved implementation in the manifest.
+      - name: Check pinned version and implementation
+        id: pin
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQ_VERSION=$(jq -r '.buildingBlock.version' "$REQ")
+          REQ_PLATFORM=$(jq -r '.context.platform' "$REQ")
+
+          if [ "$REQ_VERSION" != "$IBB_VERSION" ]; then
+            echo "::error::buildingBlock.version ($REQ_VERSION) does not match the pinned pipeline version ($IBB_VERSION). VER-004 prohibits floating references."
+            exit 1
+          fi
+
+          IMPL=$(yq -o=json '.implementations' ibb-manifest.yaml | jq -r --arg p "$REQ_PLATFORM" '.[$p] // empty')
+          if [ -z "$IMPL" ]; then
+            echo "::error::platform '$REQ_PLATFORM' has no implementation declared in ibb-manifest.yaml"
+            exit 1
+          fi
+          echo "platform=$REQ_PLATFORM" >> "$GITHUB_OUTPUT"
+
+      # 4. Authorize requested operation against capability + environment (SEC-007). SBP AWS-008:
+      #    a prd request must carry an approved changeReference before anything else runs.
+      - name: Authorize operation
+        id: authz
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          OPERATION=$(jq -r '.request.operation' "$REQ")
+          ENVIRONMENT=$(jq -r '.context.environment' "$REQ")
+          CHANGE_REF=$(jq -r '.context.changeReference // empty' "$REQ")
+
+          if [ "$ENVIRONMENT" = "prd" ] && [ -z "$CHANGE_REF" ]; then
+            echo "::error::SBP AWS-008: context.changeReference is required for environment: prd"
+            exit 1
+          fi
+
+          echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      # 5. Resolve implementation + map requirements.<category>.<property> (and
+      #    context.dataClassification) through ibb-manifest.yaml's requirementMapping into
+      #    Terraform variables (CON-002: this translation lives inside the IBB, never in the
+      #    consumer request). requirementMapping.aws mirrors the same category nesting as the
+      #    request. instance_profile_name and kms_key_arn are resolved via the identity and
+      #    key-management dependencies respectively — this pipeline expects their outputs to be
+      #    reachable via org-standard lookup vars once those capabilities exist; until then they
+      #    are sourced from repo/environment variables as a placeholder (see §6 of the scaffold).
+      - name: Resolve requirement mapping into IaC vars
+        id: map
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+
+          cat <<EOF > iac/aws/terraform.tfvars.json
+          {
+            "application_id": $(jq '.context.applicationId' "$REQ"),
+            "environment": $(jq '.context.environment' "$REQ"),
+            "data_classification": $(jq '.context.dataClassification' "$REQ"),
+            "subnet_id": $(jq '.requirements.operations.subnetId' "$REQ"),
+            "os_family": $(jq '.requirements.operations.osFamily' "$REQ"),
+            "compute_tier": $(jq '.requirements.sizing.computeTier' "$REQ"),
+            "network_exposure": $(jq '.requirements.access.networkExposure' "$REQ"),
+            "availability_zone_index": $(jq '.requirements.resilience.availabilityZoneIndex' "$REQ"),
+            "termination_protection": $(jq '.requirements.resilience.terminationProtection' "$REQ"),
+            "encryption_required": $(jq '.requirements.security.encryptionRequired' "$REQ"),
+            "security_group_profile": $(jq '.requirements.security.securityGroupProfile' "$REQ"),
+            "instance_profile_name": "${{ vars.COMPUTE_INSTANCE_AWS_INSTANCE_PROFILE_NAME }}",
+            "kms_key_arn": "${{ vars.COMPUTE_INSTANCE_AWS_KMS_KEY_ARN }}"
+          }
+          EOF
+          cat iac/aws/terraform.tfvars.json
+
+      # 6. Short-circuit on validate: schema + version/platform + authZ checks above ARE the
+      #    validation for this operation — nothing to provision.
+      - name: Compose validate-only output
+        if: steps.authz.outputs.operation == 'validate'
+        run: |
+          jq -n \
+            --arg requestId "$(jq -r '.request.requestId' '${{ github.event.inputs.request }}')" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg version "$IBB_VERSION" \
+            --arg impl "${{ steps.pin.outputs.platform }}" \
+            '{requestId: $requestId, executionId: $executionId, status: "completed",
+              buildingBlock: {name: "compute-instance", version: $version, implementation: $impl}}' \
+            > output.json
+
+      # 7. Retrieve scoped execution credentials via OIDC — never a long-lived static credential,
+      #    and never hand privileged credentials to the caller (SEC-006, SEC-007, SBP AWS-001).
+      - name: Retrieve AWS execution credentials
+        if: steps.authz.outputs.operation != 'validate'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.COMPUTE_INSTANCE_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.COMPUTE_INSTANCE_AWS_REGION || 'us-east-1' }}
+
+      - name: Setup Terraform
+        if: steps.authz.outputs.operation != 'validate'
+        uses: hashicorp/setup-terraform@v3
+
+      # 8-9. Prepare IaC variables/workspace, then run policy-as-code checks PRE-apply (SEC-004).
+      - name: Terraform init/plan
+        if: steps.authz.outputs.operation != 'validate'
+        working-directory: compute-instance-ibb/iac/aws
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          if [ "${{ steps.authz.outputs.operation }}" = "delete" ]; then
+            terraform plan -destroy -input=false -out=tfplan
+          else
+            terraform plan -input=false -out=tfplan
+          fi
+          terraform show -json tfplan > tfplan.json
+
+      - name: Install conftest
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          curl -sL https://github.com/open-policy-agent/conftest/releases/download/v0.55.0/conftest_0.55.0_Linux_x86_64.tar.gz | tar xz conftest
+          sudo mv conftest /usr/local/bin/
+
+      - name: Policy check (pre-apply)
+        if: steps.authz.outputs.operation != 'validate'
+        run: conftest test iac/aws/tfplan.json --policy policies/aws/
+
+      # 10. Execute IaC.
+      - name: Terraform apply / destroy
+        if: steps.authz.outputs.operation != 'validate'
+        working-directory: compute-instance-ibb/iac/aws
+        run: terraform apply -input=false -auto-approve tfplan
+
+      # 11. Verify deployed state AND Security Blueprint controls against LIVE resources —
+      #     a successful apply is not evidence of conformance (SEC-005).
+      - name: Verify controls (post-apply)
+        if: steps.authz.outputs.operation != 'validate' && steps.authz.outputs.operation != 'delete'
+        working-directory: compute-instance-ibb/iac/aws
+        run: |
+          set -euo pipefail
+          INSTANCE_ID=$(terraform output -raw instance_id)
+          REQ="../../../${{ github.event.inputs.request }}"
+          EXPOSURE=$(jq -r '.requirements.access.networkExposure' "$REQ")
+          ENCRYPTION_REQUIRED=$(jq -r '.requirements.security.encryptionRequired' "$REQ")
+          TERMINATION_PROTECTION=$(jq -r '.requirements.resilience.terminationProtection' "$REQ")
+
+          DESCRIBE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID")
+
+          # SBP AWS-002: root volume is encrypted (and uses a CMK when required).
+          ROOT_DEVICE=$(echo "$DESCRIBE" | jq -r '.Reservations[0].Instances[0].RootDeviceName')
+          ROOT_VOLUME_ID=$(echo "$DESCRIBE" | jq -r --arg d "$ROOT_DEVICE" '.Reservations[0].Instances[0].BlockDeviceMappings[] | select(.DeviceName==$d) | .Ebs.VolumeId')
+          VOLUME=$(aws ec2 describe-volumes --volume-ids "$ROOT_VOLUME_ID")
+          LIVE_ENCRYPTED=$(echo "$VOLUME" | jq -r '.Volumes[0].Encrypted')
+          LIVE_KMS_KEY=$(echo "$VOLUME" | jq -r '.Volumes[0].KmsKeyId // empty')
+          CONTROL_002="fail"
+          if [ "$LIVE_ENCRYPTED" = "true" ] && { [ "$ENCRYPTION_REQUIRED" != "true" ] || [ -n "$LIVE_KMS_KEY" ]; }; then
+            CONTROL_002="pass"
+          fi
+
+          # SBP AWS-003: IMDSv2 enforced.
+          METADATA=$(echo "$DESCRIBE" | jq -r '.Reservations[0].Instances[0].MetadataOptions')
+          CONTROL_003="fail"
+          [ "$(echo "$METADATA" | jq -r '.HttpTokens')" = "required" ] && [ "$(echo "$METADATA" | jq -r '.HttpPutResponseHopLimit')" = "1" ] && CONTROL_003="pass"
+
+          # SBP AWS-004: public IP assignment matches requested networkExposure.
+          LIVE_PUBLIC_IP=$(echo "$DESCRIBE" | jq -r '.Reservations[0].Instances[0].PublicIpAddress // empty')
+          CONTROL_004="fail"
+          if { [ "$EXPOSURE" = "public" ] && [ -n "$LIVE_PUBLIC_IP" ]; } || { [ "$EXPOSURE" = "private" ] && [ -z "$LIVE_PUBLIC_IP" ]; }; then
+            CONTROL_004="pass"
+          fi
+
+          # SBP AWS-006: termination protection matches request.
+          LIVE_TERMINATION=$(aws ec2 describe-instance-attribute --instance-id "$INSTANCE_ID" \
+            --attribute disableApiTermination --query "DisableApiTermination.Value" --output text)
+          CONTROL_006="fail"
+          [ "$LIVE_TERMINATION" = "$TERMINATION_PROTECTION" ] && CONTROL_006="pass"
+
+          # SBP AWS-007: detailed monitoring enabled and CloudTrail captured a RunInstances event.
+          LIVE_MONITORING=$(echo "$DESCRIBE" | jq -r '.Reservations[0].Instances[0].Monitoring.State')
+          CONTROL_007="fail"
+          EVENTS=$(aws cloudtrail lookup-events \
+            --lookup-attributes AttributeKey=EventName,AttributeValue=RunInstances \
+            --max-results 5 --output json || echo '{"Events":[]}')
+          if [ "$LIVE_MONITORING" = "enabled" ] && [ "$(echo "$EVENTS" | jq '.Events | length')" -gt 0 ]; then
+            CONTROL_007="pass"
+          fi
+
+          jq -n \
+            --arg c002 "$CONTROL_002" --arg c003 "$CONTROL_003" --arg c004 "$CONTROL_004" \
+            --arg c006 "$CONTROL_006" --arg c007 "$CONTROL_007" --arg instanceId "$INSTANCE_ID" \
+            '[{control: "AWS-002", result: $c002, detail: "root volume encrypted, CMK used when encryptionRequired"},
+              {control: "AWS-003", result: $c003, detail: "IMDSv2 enforced (http_tokens=required, hop_limit=1)"},
+              {control: "AWS-004", result: $c004, detail: "live public IP assignment matches requested networkExposure"},
+              {control: "AWS-006", result: $c006, detail: "live disableApiTermination matches requested terminationProtection"},
+              {control: "AWS-007", result: $c007, detail: "detailed monitoring enabled and CloudTrail captured RunInstances event"}]' \
+            > ../../verification.json
+          cat ../../verification.json
+
+      # 12-13. Compose evidence and the standardized output, propagating context.correlationId
+      #        through to the evidence record (EVD-001, EVD-002, EVD-003). status must distinguish
+      #        completed / partially completed / failed.
+      - name: Compose evidence and standardized output
+        if: steps.authz.outputs.operation != 'validate'
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQUEST_ID=$(jq -r '.request.requestId' "$REQ")
+          CORRELATION_ID=$(jq -r '.context.correlationId' "$REQ")
+          OPERATION="${{ steps.authz.outputs.operation }}"
+
+          STATUS="completed"
+          if [ -f verification.json ] && jq -e 'map(select(.result == "fail")) | length > 0' verification.json > /dev/null; then
+            STATUS="partially completed"
+          fi
+
+          if [ "$OPERATION" = "delete" ]; then
+            RESULT='{}'
+          else
+            RESULT=$(cd iac/aws && jq -n \
+              --arg instanceId "$(terraform output -raw instance_id)" \
+              --arg privateIp "$(terraform output -raw private_ip)" \
+              --arg publicIp "$(terraform output -raw public_ip)" \
+              --arg availabilityZone "$(terraform output -raw availability_zone)" \
+              '{instanceId: $instanceId, privateIp: $privateIp,
+                publicIp: (if $publicIp == "" then null else $publicIp end),
+                availabilityZone: $availabilityZone, operationalState: "active"}')
+          fi
+
+          jq -n \
+            --arg requestId "$REQUEST_ID" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg status "$STATUS" \
+            --arg version "$IBB_VERSION" \
+            --arg impl "${{ steps.pin.outputs.platform }}" \
+            --argjson result "$RESULT" \
+            --arg correlationId "$CORRELATION_ID" \
+            --arg evidenceLocation "verification.json" \
+            '{requestId: $requestId, executionId: $executionId, status: $status,
+              buildingBlock: {name: "compute-instance", version: $version, implementation: $impl},
+              result: $result,
+              evidence: {complianceResult: (if $status == "completed" then "passed" else "failed" end),
+                         evidenceLocation: $evidenceLocation, deploymentRecord: $correlationId}}' \
+            > output.json
+          cat output.json
+
+      # EVD-004: any failed step above (schema validation, version pin, authorization, policy
+      # gate, apply) must still surface a structured error, not just a red X on the run. This
+      # composes ibb-error-v1.schema.json whenever the job did not reach a successful compose step.
+      - name: Compose error output on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.request }}"
+          REQUEST_ID=$(jq -r '.request.requestId // "unknown"' "$REQ" 2>/dev/null || echo "unknown")
+          CORRELATION_ID=$(jq -r '.context.correlationId // empty' "$REQ" 2>/dev/null || echo "")
+          jq -n \
+            --arg requestId "$REQUEST_ID" \
+            --arg executionId "${{ steps.exec.outputs.execution_id }}" \
+            --arg version "$IBB_VERSION" \
+            --arg correlationId "$CORRELATION_ID" \
+            '{requestId: $requestId, executionId: $executionId, status: "failed",
+              buildingBlock: {name: "compute-instance", version: $version, implementation: "unknown"},
+              error: {code: "IBB-COMPUTEINSTANCE-001", category: "execution",
+                      message: "Pipeline run failed — see the failing step in the GitHub Actions run log for detail.",
+                      retryable: true, failedStage: "${{ job.status }}", correlationId: $correlationId}}' \
+            > output.json
+
+      # 14. Publish standardized outputs as artifacts (success or the shared error contract).
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compute-instance-output-${{ steps.exec.outputs.execution_id }}
+          path: |
+            compute-instance-ibb/output.json
+            compute-instance-ibb/verification.json
+          if-no-files-found: ignore

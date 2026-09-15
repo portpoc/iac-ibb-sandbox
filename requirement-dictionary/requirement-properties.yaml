@@ -38,6 +38,13 @@ categories:
           Address space allocated to a network segment, in CIDR notation (e.g. "10.0.1.0/24").
           Maps to the provider's subnet CIDR-block attribute.
         usedBy: [subnet]
+      computeTier:
+        type: string
+        enum: [small, medium, large, xlarge]
+        description: >
+          Abstract compute sizing tier — how much vCPU/RAM the resource gets. Never a literal
+          instance type/SKU; maps internally to the provider's actual instance type per platform.
+        usedBy: [compute-instance]
 
   access:
     description: >
@@ -56,7 +63,7 @@ categories:
         description: >
           Whether the network segment routes egress via a public gateway (public) or stays
           internal-only, with no direct route to the public internet (private).
-        usedBy: [subnet]
+        usedBy: [subnet, compute-instance]
 
   resilience:
     description: >
@@ -80,7 +87,13 @@ categories:
           Ordinal zone placement within the region (0, 1, 2, ...), mapped internally per platform
           to the actual zone identifier (e.g. "us-east-1a", "westeurope-1"). Kept ordinal, not a
           literal zone name, so the same value is agnostic across platforms and regions.
-        usedBy: [subnet]
+        usedBy: [subnet, compute-instance]
+      terminationProtection:
+        type: boolean
+        description: >
+          Whether the resource is protected against accidental termination/deletion via the
+          provider's API; a change to false still requires an explicit request.
+        usedBy: [compute-instance]
 
   security:
     description: >
@@ -92,7 +105,7 @@ categories:
         description: >
           Whether a customer-managed key (via the key-management IBB) is mandatory, vs.
           platform-default encryption.
-        usedBy: [object-storage]
+        usedBy: [object-storage, compute-instance]
       networkAclProfile:
         type: string
         enum: [default, restrictive]
@@ -101,6 +114,15 @@ categories:
           standard default rule set, or an explicit restrictive rule set scoped to the parent
           network's own address space only.
         usedBy: [subnet]
+      securityGroupProfile:
+        type: string
+        enum: [default, restrictive]
+        description: >
+          Baseline instance-level firewall (security group / NSG on the resource itself, not the
+          network segment) posture: the platform's standard default rule set, or an explicit
+          restrictive rule set that denies all inbound traffic except from the parent network's
+          own address space.
+        usedBy: [compute-instance]
 
   operations:
     description: >
@@ -145,3 +167,18 @@ categories:
           the parent resource's own identifier/name, resolved internally to the provider's lookup
           mechanism (e.g. a VPC id, a VNet resource id).
         usedBy: [subnet]
+      subnetId:
+        type: string
+        description: >
+          Identifier of the subnet (provisioned by the subnet capability dependency) this resource
+          is placed into. Not a vendor SKU — just the subnet's own identifier/name, resolved
+          internally to the provider's lookup mechanism.
+        usedBy: [compute-instance]
+      osFamily:
+        type: string
+        enum: [linux, windows]
+        description: >
+          The operating system family this compute resource runs, driving which platform-approved
+          base image is selected internally per platform via requirementMapping. Never a literal
+          AMI/image id in the agnostic contract.
+        usedBy: [compute-instance]

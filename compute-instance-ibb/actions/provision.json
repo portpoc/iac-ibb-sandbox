@@ -1,0 +1,128 @@
+{
+  "identifier": "provision_compute_instance",
+  "title": "Provision Compute Instance",
+  "icon": "Cloud",
+  "description": "Create a new Compute Instance resource via the compute-instance IBB pipeline (compute-instance@0.1.0).",
+  "trigger": {
+    "type": "self-service",
+    "operation": "CREATE",
+    "userInputs": {
+      "properties": {
+        "environment": {
+          "type": "string",
+          "title": "Environment",
+          "enum": ["dev", "qua", "tst", "ppr", "prd"],
+          "enumColors": {
+            "dev": "blue",
+            "qua": "yellow",
+            "tst": "bronze",
+            "ppr": "orange",
+            "prd": "red"
+          }
+        },
+        "applicationId": {
+          "type": "string",
+          "title": "Application ID",
+          "description": "Pattern APP-nnn, e.g. APP-1234."
+        },
+        "costCenter": {
+          "type": "string",
+          "title": "Cost center"
+        },
+        "dataClassification": {
+          "type": "string",
+          "title": "Data classification",
+          "enum": ["internal", "confidential"]
+        },
+        "changeReference": {
+          "type": "string",
+          "title": "Change reference",
+          "description": "Approved change record reference. Required by the pipeline for environment: prd (SBP AWS-008); optional otherwise."
+        },
+        "subnetId": {
+          "type": "string",
+          "title": "Subnet ID",
+          "description": "The AWS subnet id this instance is launched into (from the subnet capability)."
+        },
+        "osFamily": {
+          "type": "string",
+          "title": "OS family",
+          "enum": ["linux", "windows"]
+        },
+        "computeTier": {
+          "type": "string",
+          "title": "Compute tier",
+          "enum": ["small", "medium", "large", "xlarge"]
+        },
+        "networkExposure": {
+          "type": "string",
+          "title": "Network exposure",
+          "enum": ["private", "public"]
+        },
+        "availabilityZoneIndex": {
+          "type": "number",
+          "title": "Availability zone index",
+          "minimum": 0,
+          "default": 0,
+          "description": "Ordinal zone placement within the region (0, 1, 2, ...). Must match the target subnet's own zone."
+        },
+        "terminationProtection": {
+          "type": "boolean",
+          "title": "Termination protection",
+          "default": false
+        },
+        "encryptionRequired": {
+          "type": "boolean",
+          "title": "Encryption required",
+          "default": true,
+          "description": "Whether the root volume must use a customer-managed key. The root volume is always encrypted either way."
+        },
+        "securityGroupProfile": {
+          "type": "string",
+          "title": "Security group profile",
+          "enum": ["default", "restrictive"]
+        }
+      },
+      "required": [
+        "environment",
+        "applicationId",
+        "costCenter",
+        "dataClassification",
+        "subnetId",
+        "osFamily",
+        "computeTier",
+        "networkExposure",
+        "availabilityZoneIndex",
+        "terminationProtection",
+        "encryptionRequired",
+        "securityGroupProfile"
+      ],
+      "order": [
+        "environment",
+        "applicationId",
+        "costCenter",
+        "dataClassification",
+        "changeReference",
+        "subnetId",
+        "osFamily",
+        "computeTier",
+        "networkExposure",
+        "availabilityZoneIndex",
+        "terminationProtection",
+        "encryptionRequired",
+        "securityGroupProfile"
+      ]
+    }
+  },
+  "invocationMethod": {
+    "type": "GITHUB",
+    "org": "portpoc",
+    "repo": "iac-ibb-sandbox",
+    "workflow": "compute-instance.yml",
+    "workflowInputs": {
+      "request": "{\"request\":{\"operation\":\"create\",\"requestId\":\"req-{{ .run.id }}\"},\"buildingBlock\":{\"name\":\"compute-instance\",\"version\":\"0.1.0\"},\"context\":{\"applicationId\":\"{{ .inputs.applicationId }}\",\"environment\":\"{{ .inputs.environment }}\",\"platform\":\"aws\",\"costCenter\":\"{{ .inputs.costCenter }}\",\"dataClassification\":\"{{ .inputs.dataClassification }}\",\"requesterIdentity\":\"{{ .trigger.by.user.email }}\",\"correlationId\":\"corr-{{ .run.id }}\",\"changeReference\":\"{{ .inputs.changeReference }}\"},\"requirements\":{\"sizing\":{\"computeTier\":\"{{ .inputs.computeTier }}\"},\"access\":{\"networkExposure\":\"{{ .inputs.networkExposure }}\"},\"resilience\":{\"availabilityZoneIndex\":{{ .inputs.availabilityZoneIndex }},\"terminationProtection\":{{ .inputs.terminationProtection }} },\"security\":{\"encryptionRequired\":{{ .inputs.encryptionRequired }},\"securityGroupProfile\":\"{{ .inputs.securityGroupProfile }}\"},\"operations\":{\"subnetId\":\"{{ .inputs.subnetId }}\",\"osFamily\":\"{{ .inputs.osFamily }}\"} } }"
+    },
+    "reportWorkflowStatus": true
+  },
+  "requiredApproval": false
+}
